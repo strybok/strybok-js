@@ -1,0 +1,14 @@
+{
+  "extends": "@strybok/config/tsconfig.base.json",
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM"],
+    // Inside the workspace the core is used from source, so no build is needed to type-check or
+    // test. tsconfig.build.json clears this and compiles against the built core instead.
+    "paths": {
+      "@strybok/js": ["../js_sdk/src/index.ts"],
+      "@strybok/js/testing": ["../js_sdk/src/testing.ts"]
+    }
+  },
+  "include": ["src", "test"]
+}

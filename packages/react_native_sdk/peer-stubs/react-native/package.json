@@ -1,0 +1,6 @@
+{
+  "name": "react-native",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Empty stand-in so that pnpm does not auto-install the real peer dependency into this repository. See ../README.md."
+}

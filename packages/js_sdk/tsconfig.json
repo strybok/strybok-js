@@ -1,0 +1,10 @@
+{
+  "extends": "@strybok/config/tsconfig.base.json",
+  "compilerOptions": {
+    // Type-checks sources together with tests. Tests use fetch/Response/setTimeout types from DOM;
+    // the sources must not: tsconfig.build.json compiles them again without it.
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM"]
+  },
+  "include": ["src", "test"]
+}

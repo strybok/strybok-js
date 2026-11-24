@@ -1,0 +1,23 @@
+{
+  "name": "@strybok/config",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    "./eslint": "./eslint.config.js",
+    "./tsconfig.base.json": "./tsconfig.base.json"
+  },
+  "scripts": {
+    "lint": "echo 'no lint'",
+    "typecheck": "echo 'no typecheck'",
+    "test": "echo 'no tests'"
+  },
+  "dependencies": {
+    "@eslint/js": "^10.0.0",
+    "typescript-eslint": "^8.72.2"
+  },
+  "peerDependencies": {
+    "eslint": "^10.0.0",
+    "typescript": ">=5.9 <6.1"
+  }
+}

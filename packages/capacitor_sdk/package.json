@@ -1,0 +1,51 @@
+{
+  "name": "@strybok/capacitor",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Strybok deep-link SDK for Capacitor and Ionic: resolves Universal Links / App Links to an in-app route and delivers each link exactly once.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "pnpm run clean && tsc -p tsconfig.build.json",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@strybok/js": "workspace:*"
+  },
+  "peerDependencies": {
+    "@capacitor/app": ">=5",
+    "@capacitor/core": ">=5"
+  },
+  "devDependencies": {
+    "@capacitor/app": "link:./peer-stubs/capacitor-app",
+    "@capacitor/core": "link:./peer-stubs/capacitor-core",
+    "@strybok/config": "workspace:*",
+    "eslint": "^10.14.0",
+    "typescript": "~6.0.0",
+    "vitest": "^4.1.12"
+  }
+}

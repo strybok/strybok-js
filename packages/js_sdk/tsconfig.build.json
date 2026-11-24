@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // No DOM and no Node types: the core may only use what every JavaScript runtime has
+    // (React Native's Hermes included). Runtime globals are reached through src/runtime.ts.
+    "lib": ["ES2020"],
+    "types": [],
+    "noEmit": false,
+    "rootDir": "src",
+    "outDir": "dist",
+    "declaration": true
+  },
+  "include": ["src"]
+}
