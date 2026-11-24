@@ -1,0 +1,73 @@
+# Publishes the packages to npm with trusted publishing (OIDC): no npm token is stored anywhere.
+# Each package on npmjs.com trusts exactly this workflow file in this repository.
+#
+# Release: bump "version" in the package.json files in the Strybok monorepo, sync this
+# repository, then push a tag `v<version>`. Packages whose version is already on npm are skipped.
+name: Publish to npm
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build, test and pack only; publish nothing
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write # lets npm verify that the run comes from this repository
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or newer.
+      - run: npm install --global npm@latest
+      - run: pnpm install
+      - run: pnpm build
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - name: Pack
+        run: |
+          mkdir -p "$RUNNER_TEMP/packs"
+          # The core first: the adapters depend on it.
+          for dir in js_sdk react_native_sdk capacitor_sdk; do
+            (cd "packages/$dir" && pnpm pack --pack-destination "$RUNNER_TEMP/packs")
+          done
+          ls -l "$RUNNER_TEMP/packs"
+      - name: Publish
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          for dir in js_sdk react_native_sdk capacitor_sdk; do
+            name=$(node -p "require('./packages/$dir/package.json').name")
+            version=$(node -p "require('./packages/$dir/package.json').version")
+            if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match $name@$version"
+              exit 1
+            fi
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already on npm, skipping"
+              continue
+            fi
+            tarball=$(ls "$RUNNER_TEMP/packs"/"$(echo "$name" | sed 's/^@//; s/\//-/')-$version.tgz")
+            if [ "$DRY_RUN" = "true" ]; then
+              npm publish "$tarball" --access public --dry-run
+            else
+              npm publish "$tarball" --access public
+            fi
+          done
