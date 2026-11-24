@@ -9,7 +9,7 @@ JavaScript, no native module, so there is nothing to link and no Expo config plu
 
 > **Status:** covered by unit tests that use a fake `Linking` module and a fake hooks runtime.
 > It has **not** been run inside a real React Native or Expo app and not on a physical device
-> (see the [manual test plan](./manual-test-plan.md)); treat 0.1.x as an early release.
+> (see the [manual test plan](./manual-test-plan.md)); treat 0.x as an early release.
 > The native snippets below follow the React Native and Expo documentation; verify them against
 > the versions you use.
 >
@@ -272,12 +272,13 @@ approach, do not also navigate from `useStrybokLink` / `onLink`.
 
 `createStrybok` takes the options of the core: `apiBaseUrl`, `allowedHosts`, `timeoutMs` (5000 per
 attempt), `maxRetries` (2; only timeouts, network errors and 5xx are retried), `retryDelayMs`,
-`dedupeWindowMs`, `reportAppOpens`, `onError`, plus `fetch`, `linkSource` and `platform` for
+`dedupeWindowMs`, `reportAppOpens`, `onError`, `clientKey` (for `createLink`, section 5), plus `fetch`, `linkSource` and `platform` for
 tests.
 
 ### Errors
 
-`resolveUrl` rejects with, and `onError` receives, a `StrybokError`:
+`resolveUrl` rejects with, and `onError` receives, a `StrybokError` (for `createLink` see
+section 5):
 
 | Type                                          | Meaning                                                                                                                                              |
 | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -289,28 +290,88 @@ tests.
 Each error also has a string `kind` (`'link_not_found'`, `'timeout'`, ...) and the `url` it
 belongs to.
 
-## 5. Treat routes as untrusted input
+## 5. Create a link to share
+
+`createLink` asks the service for a short link to a screen of your app, for a "Share" button:
+
+```ts
+import { createStrybok, StrybokRateLimitedError } from '@strybok/react-native';
+
+export const strybok = createStrybok({
+  apiBaseUrl: 'https://api.strybok.com',
+  allowedHosts: ['my-app.strybok.link'],
+  clientKey: 'pk_...', // the application's publishable client key
+});
+
+async function shareProduct(productId: number) {
+  try {
+    const link = await strybok.createLink(`/product/${productId}`, {
+      payload: { productId },
+      title: 'Red shoes',
+      description: 'Look at these',
+      imageUrl: 'https://cdn.example.com/shoes.png',
+    });
+    await Share.share({ message: link.url }); // Share from 'react-native'
+  } catch (error) {
+    if (error instanceof StrybokRateLimitedError) {
+      // Try again later, after error.retryAfterSeconds when it is set.
+    }
+    // ...
+  }
+}
+```
+
+**Enable it first.** In the dashboard, open the application, switch on "Links from the app" and
+list the route patterns the app may create links for. The page shows the publishable client key
+(`pk_…`) to pass as `clientKey`. The key is safe to ship inside the app: it can only create links
+for those route patterns. Never put a secret API key (`lb_…`) into an app.
+
+- Only the route is required; `payload` (a JSON object), `title`, `description` and `imageUrl` are
+  optional. The result has `url` (what the user shares), `slug`, `routePath` and `linkId`.
+- Creating the same link again returns the existing link instead of making a second one.
+- It runs only when you call it: it does not need `initialize()` and is never part of the app's
+  start.
+- Timeouts, network errors and 5xx are retried like resolving (`timeoutMs`, `maxRetries`,
+  `retryDelayMs`); 4xx, including 429, never.
+
+It rejects with a `StrybokError`; these errors never reach `onError` and never contain the client
+key or the payload.
+
+| Type                                          | Meaning                                                                                                                       |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `StrybokUnauthorizedError`                    | No `clientKey` configured (no request is made), or the key is wrong or was replaced, or the feature is switched off.          |
+| `RouteNotAllowedError`                        | The route is not covered by the application's route patterns (`routePath`).                                                   |
+| `StrybokRateLimitedError`                     | Too many requests, or the app's daily limit of new links is reached (`retryAfterSeconds`, when the service sent it).          |
+| `StrybokValidationError`                      | The arguments were rejected by the SDK (route not starting with one `/`, payload not an object) or by the service (`issues`). |
+| `StrybokTimeoutError` / `StrybokNetworkError` | No answer after all retries (e.g. offline).                                                                                   |
+| `StrybokServerError`                          | Unexpected status or malformed response (`statusCode`).                                                                       |
+
+Rate-limit, timeout, network and server errors are temporary: let the user try again later. The
+other three do not go away by retrying; the app or the dashboard settings need a change. Details:
+[JavaScript core, "Create a link to share"](./javascript.md#6-create-a-link-to-share).
+
+## 6. Treat routes as untrusted input
 
 `routePath` and `payload` are data from the network. Match the route against routes your app
 knows before navigating (as `openLink` does above), and never execute payload contents.
 
-## 6. Links that arrive before sign-in
+## 7. Links that arrive before sign-in
 
 If a link needs an authenticated user, remember the route and open it after login instead of
 dropping it. Alternatively render the component that calls `useStrybokLink` only for signed-in
 users: links are queued until it mounts.
 
-## 7. Analytics and privacy
+## 8. Analytics and privacy
 
 After a link is delivered the SDK sends one best-effort `app_open` event
 (`POST /v1/public/events`) containing a random event id, the link id, the platform
-(`ios`/`android`) and the SDK version (`0.1.0+react-native`), and no device identifiers. It never
+(`ios`/`android`) and the SDK version (`0.2.0+react-native`), and no device identifiers. It never
 delays navigation and all failures are ignored. Disable it with `reportAppOpens: false`.
 
 Only the link's host and slug are sent to `resolve`; query parameters and fragments stay on the
 device.
 
-## 8. Testing your integration
+## 9. Testing your integration
 
 `@strybok/react-native/testing` provides `FakeLinkSource`; pass it as `linkSource` together with a
 fake `fetch`:

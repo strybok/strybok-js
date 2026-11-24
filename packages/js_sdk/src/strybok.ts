@@ -1,15 +1,23 @@
 import {
   LinkNotFoundError,
+  RouteNotAllowedError,
   StrybokError,
   StrybokNetworkError,
+  StrybokRateLimitedError,
   StrybokServerError,
   StrybokTimeoutError,
+  StrybokUnauthorizedError,
+  StrybokValidationError,
   UnsupportedLinkError,
+  type StrybokValidationIssue,
 } from './errors.js';
 import { runtime, sleep, type AbortControllerLike } from './runtime.js';
 import type {
+  CreatedLink,
+  CreateLinkOptions,
   FetchLike,
   FetchRequestInit,
+  FetchResponseLike,
   LinkErrorHandler,
   LinkListener,
   LinkSource,
@@ -25,6 +33,7 @@ import { SDK_VERSION } from './version.js';
 const API_BASE_URL = /^https?:\/\/[^\s/?#]+(\/[^\s?#]*)?$/i;
 const SDK_VERSION_FORMAT = /^[0-9A-Za-z.+-]{1,32}$/;
 const PLATFORMS: readonly StrybokPlatform[] = ['ios', 'android', 'unknown'];
+const MAX_ROUTE_PATH_LENGTH = 512;
 const DISPOSED_MESSAGE = 'Strybok has been disposed';
 const DONE: Promise<void> = Promise.resolve();
 
@@ -42,6 +51,8 @@ interface Reception {
 interface HttpResult {
   readonly status: number;
   readonly body: string;
+  /** The `Retry-After` response header, when the transport exposes headers and it was sent. */
+  readonly retryAfter: string | null;
 }
 
 /**
@@ -71,6 +82,8 @@ export class Strybok {
   /** Version sent with `app_open` events. */
   readonly sdkVersion: string;
 
+  /** Only sent with `createLink`. */
+  private readonly clientKey: string | undefined;
   private readonly source: LinkSource;
   private readonly customFetch: FetchLike | undefined;
   private readonly onError: LinkErrorHandler | undefined;
@@ -143,6 +156,12 @@ export class Strybok {
     if (typeof this.sdkVersion !== 'string' || !SDK_VERSION_FORMAT.test(this.sdkVersion)) {
       throw new TypeError('Strybok: sdkVersion must be 1-32 characters of [0-9A-Za-z.+-]');
     }
+
+    const clientKey = options.clientKey ?? undefined;
+    if (clientKey !== undefined && typeof clientKey !== 'string') {
+      throw new TypeError('Strybok: clientKey must be a string');
+    }
+    this.clientKey = clientKey;
 
     if (options.fetch !== undefined && typeof options.fetch !== 'function') {
       throw new TypeError('Strybok: fetch must be a function');
@@ -259,6 +278,109 @@ export class Strybok {
         url,
       );
       if (!(result.status >= 500)) throw error; // Client errors will not improve.
+      lastError = error;
+    }
+    throw lastError as StrybokError;
+  }
+
+  /**
+   * Creates a short link to a screen of this app, for a "Share" button, and resolves with it
+   * (`url` is what the user shares).
+   *
+   * Needs the `clientKey` option, and the feature enabled for the application in the dashboard
+   * with route patterns that cover `routePath`. Works before and without {@link initialize}, and
+   * is never called by the SDK itself. Creating the same link again returns the existing one.
+   *
+   * Rejects with a {@link StrybokError}, never through `onError`: `StrybokUnauthorizedError`,
+   * `RouteNotAllowedError`, `StrybokRateLimitedError`, `StrybokValidationError`, and
+   * network/timeout/server errors after the same retries as resolving. The errors never contain
+   * the client key or the payload.
+   */
+  async createLink(routePath: string, options?: CreateLinkOptions): Promise<CreatedLink> {
+    this.checkNotDisposed();
+    const clientKey = this.clientKey;
+    if (clientKey === undefined || clientKey === '') {
+      throw new StrybokUnauthorizedError('No clientKey is configured');
+    }
+    if (
+      typeof routePath !== 'string' ||
+      !routePath.startsWith('/') ||
+      routePath.startsWith('//') ||
+      routePath.length > MAX_ROUTE_PATH_LENGTH
+    ) {
+      throw new StrybokValidationError(
+        `routePath must start with a single "/" and be at most ${MAX_ROUTE_PATH_LENGTH} characters long`,
+      );
+    }
+    if (options !== undefined && options !== null && !isRecord(options)) {
+      throw new StrybokValidationError('The second argument of createLink must be an object');
+    }
+    const { payload, title, description, imageUrl } = options ?? {};
+    // Built once: every retry sends exactly the same body. Parts that were not given are left
+    // out; everything else is the service's to validate.
+    const fields: Record<string, unknown> = { routePath };
+    if (payload !== undefined && payload !== null) {
+      if (!isJsonObject(payload)) {
+        throw new StrybokValidationError('payload must be a JSON object');
+      }
+      fields['payload'] = payload;
+    }
+    if (title !== undefined && title !== null) fields['title'] = title;
+    if (description !== undefined && description !== null) fields['description'] = description;
+    if (imageUrl !== undefined && imageUrl !== null) fields['imageUrl'] = imageUrl;
+    let body: string;
+    try {
+      body = JSON.stringify(fields);
+    } catch {
+      throw new StrybokValidationError('The link cannot be converted to JSON');
+    }
+    const endpoint = `${this.apiBaseUrl}/v1/public/links`;
+
+    let lastError: StrybokError | null = null;
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      if (attempt > 0) await sleep(this.retryDelayMs * 2 ** (attempt - 1));
+      this.checkNotDisposed();
+      let result: HttpResult;
+      try {
+        result = await this.send(
+          endpoint,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+              'X-Strybok-Key': clientKey,
+            },
+            body,
+          },
+          true,
+        );
+      } catch (error) {
+        this.checkNotDisposed();
+        // Without `cause`: a transport's error may carry the request, key and payload included.
+        lastError =
+          error === TIMED_OUT
+            ? new StrybokTimeoutError(undefined, 'The create link request timed out')
+            : new StrybokNetworkError('Network error');
+        continue;
+      }
+      this.checkNotDisposed();
+      const { status } = result;
+      if (status === 200 || status === 201) return parseCreateLinkResponse(status, result.body);
+      if (status === 401) {
+        throw new StrybokUnauthorizedError(
+          'The client key was not accepted, or creating links from the app is switched off',
+        );
+      }
+      if (status === 403) throw new RouteNotAllowedError(routePath);
+      if (status === 429) {
+        throw new StrybokRateLimitedError(parseRetryAfter(result.retryAfter, this.now()));
+      }
+      if (status === 400 || status === 413 || status === 422) {
+        throw parseValidationResponse(status, result.body);
+      }
+      const error = new StrybokServerError(`Unexpected status ${status}`, status);
+      if (!(status >= 500)) throw error; // Client errors will not improve.
       lastError = error;
     }
     throw lastError as StrybokError;
@@ -403,7 +525,11 @@ export class Strybok {
           url,
           controller !== null ? { ...init, signal: controller.signal } : init,
         );
-        return { status: response.status, body: readBody ? await response.text() : '' };
+        return {
+          status: response.status,
+          retryAfter: readHeader(response, 'Retry-After'),
+          body: readBody ? await response.text() : '',
+        };
       };
       exchange()
         .then(resolve, reject)
@@ -468,6 +594,90 @@ function parseResolveResponse(url: string, body: string): ResolvedLink {
     }
   }
   throw new StrybokServerError('Malformed resolve response', 200, url);
+}
+
+function parseCreateLinkResponse(status: number, body: string): CreatedLink {
+  const json = parseJson(body);
+  if (isRecord(json)) {
+    const { linkId, slug, routePath, url } = json;
+    if (
+      typeof linkId === 'string' &&
+      typeof slug === 'string' &&
+      typeof routePath === 'string' &&
+      typeof url === 'string' &&
+      /^https:\/\//i.test(url)
+    ) {
+      return { url, slug, routePath, linkId };
+    }
+  }
+  throw new StrybokServerError('Malformed create link response', status);
+}
+
+/** Reads `error.message` and `error.details.issues` of a 400, 413 or 422 answer, if present. */
+function parseValidationResponse(status: number, body: string): StrybokValidationError {
+  const json = parseJson(body);
+  const error = isRecord(json) && isRecord(json['error']) ? json['error'] : {};
+  const message = error['message'];
+  const details = error['details'];
+  const rawIssues: unknown = isRecord(details) ? details['issues'] : undefined;
+  const issues: StrybokValidationIssue[] = [];
+  if (Array.isArray(rawIssues)) {
+    for (const issue of rawIssues as unknown[]) {
+      if (
+        isRecord(issue) &&
+        typeof issue['path'] === 'string' &&
+        typeof issue['message'] === 'string'
+      ) {
+        issues.push({ path: issue['path'], message: issue['message'] });
+      }
+    }
+  }
+  return new StrybokValidationError(
+    typeof message === 'string' && message !== ''
+      ? message
+      : `The service rejected the link (status ${status})`,
+    status,
+    issues,
+  );
+}
+
+/** `Retry-After` in seconds: the header is a number of seconds or an HTTP date. */
+function parseRetryAfter(header: string | null, now: number): number | undefined {
+  if (header === null) return undefined;
+  const value = header.trim();
+  if (/^\d+$/.test(value)) return Number(value);
+  if (!/[A-Za-z]/.test(value)) return undefined; // Not a date either; `Date.parse` is lenient.
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? Math.max(0, Math.ceil((at - now) / 1000)) : undefined;
+}
+
+/** Transports are not required to provide headers, and a broken one must not fail the request. */
+function readHeader(response: FetchResponseLike, name: string): string | null {
+  try {
+    const value = response.headers?.get(name);
+    return typeof value === 'string' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/** Whether `value` is sent as a JSON object: an object whose JSON form is one, too. */
+function isJsonObject(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  try {
+    // A Date or anything else with `toJSON` is an object here and a scalar on the wire.
+    return JSON.stringify(value).startsWith('{');
+  } catch {
+    return false; // Circular, or holds a BigInt.
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

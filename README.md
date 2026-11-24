@@ -1,5 +1,7 @@
 # Strybok JavaScript SDKs
 
+[![@strybok/js](https://img.shields.io/npm/v/@strybok/js.svg?label=%40strybok%2Fjs)](https://www.npmjs.com/package/@strybok/js) [![@strybok/react-native](https://img.shields.io/npm/v/@strybok/react-native.svg?label=%40strybok%2Freact-native)](https://www.npmjs.com/package/@strybok/react-native) [![@strybok/capacitor](https://img.shields.io/npm/v/@strybok/capacitor.svg?label=%40strybok%2Fcapacitor)](https://www.npmjs.com/package/@strybok/capacitor) [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](./LICENSE)
+
 Deep links for JavaScript apps: Universal Links / App Links resolved to an in-app route
 and payload, each delivered exactly once.
 

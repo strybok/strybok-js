@@ -1,5 +1,7 @@
 # @strybok/react-native
 
+[![npm](https://img.shields.io/npm/v/@strybok/react-native.svg)](https://www.npmjs.com/package/@strybok/react-native) [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](./LICENSE)
+
 Strybok SDK for React Native and Expo. Receives iOS Universal Links / Android App Links through
 React Native's `Linking` module, resolves them through the Strybok API to an in-app route and
 payload, and delivers each link exactly once: on cold start, from the background and in the
@@ -22,10 +24,26 @@ function App() {
 }
 ```
 
+It can also create links to share. Pass the application's publishable `clientKey` to
+`createStrybok` (enable "Links from the app" in the dashboard and list the allowed route patterns
+there):
+
+```ts
+const link = await strybok.createLink('/product/42', {
+  payload: { productId: 42 },
+  title: 'Red shoes',
+});
+await Share.share({ message: link.url });
+```
+
+`createLink` rejects with a typed error (`StrybokUnauthorizedError`, `RouteNotAllowedError`,
+`StrybokRateLimitedError`, `StrybokValidationError`, `StrybokNetworkError`, `StrybokTimeoutError`,
+`StrybokServerError`), never runs during start-up and works without `initialize()`.
+
 Full guide, native setup (bare React Native and Expo) and troubleshooting:
 [`docs/react-native.md`](../../docs/react-native.md).
 
-- **Early release (0.1.x)**: covered by unit tests with fake `Linking` and fake hooks only. It
+- **Early release (0.x)**: covered by unit tests with fake `Linking` and fake hooks only. It
   has not been run inside a real React Native or Expo app, nor on a physical device.
 - Deferred deep linking is not supported.
 

@@ -8,7 +8,12 @@ export interface CapacitorHttpLike {
     headers: Record<string, string>;
     data?: unknown;
     responseType?: 'text';
-  }): Promise<{ status: number; data?: unknown }>;
+  }): Promise<{
+    status: number;
+    data?: unknown;
+    /** Header names arrive in whatever case the platform reports them. */
+    headers?: Record<string, unknown> | null;
+  }>;
 }
 
 /**
@@ -38,10 +43,24 @@ export function createCapacitorHttpFetch(http: CapacitorHttpLike): FetchLike {
     }
     return {
       status: response.status,
+      headers: { get: (name) => findHeader(response.headers, name) },
       // The plugin already parses JSON responses; hand the core the text it expects.
       text: () => Promise.resolve(toText(response.data)),
     };
   };
+}
+
+function findHeader(
+  headers: Record<string, unknown> | null | undefined,
+  name: string,
+): string | null {
+  if (headers === null || typeof headers !== 'object') return null;
+  const wanted = name.toLowerCase();
+  for (const key of Object.keys(headers)) {
+    const value = headers[key];
+    if (key.toLowerCase() === wanted && typeof value === 'string') return value;
+  }
+  return null;
 }
 
 function toText(data: unknown): string {

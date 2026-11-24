@@ -9,10 +9,18 @@ import {
   createCapacitorLinkSource,
   createStrybok,
   LinkNotFoundError,
+  RouteNotAllowedError,
   type Strybok,
+  type StrybokError,
   StrybokNetworkError,
+  StrybokRateLimitedError,
+  StrybokServerError,
+  StrybokTimeoutError,
+  StrybokUnauthorizedError,
+  StrybokValidationError,
   type CapacitorAppLike,
   type CapacitorHttpLike,
+  type CreatedLink,
   type FetchRequestInit,
   type FetchResponseLike,
   type ResolvedLink,
@@ -133,7 +141,7 @@ describe('createCapacitorLinkSource', () => {
 });
 
 describe('createCapacitorHttpFetch', () => {
-  function recorder(answer: { status: number; data?: unknown }) {
+  function recorder(answer: Awaited<ReturnType<CapacitorHttpLike['request']>>) {
     const requests: Parameters<CapacitorHttpLike['request']>[0][] = [];
     const http: CapacitorHttpLike = {
       request: (options) => {
@@ -189,6 +197,34 @@ describe('createCapacitorHttpFetch', () => {
       const { fetch } = recorder({ status: 200, data });
       const response = await fetch('https://api.strybok.com/x', { method: 'GET', headers: {} });
       expect(await response.text()).toBe(text);
+    }
+  });
+
+  it('passes request headers through and reads response headers in any case', async () => {
+    const { requests, fetch } = recorder({
+      status: 429,
+      headers: { 'retry-after': '30', 'Content-Type': 'application/json', broken: 7 },
+    });
+    const response = await fetch('https://api.strybok.com/x', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Strybok-Key': 'pk_test' },
+      body: '{"routePath":"/a"}',
+    });
+    expect(requests[0]!.headers).toEqual({
+      'Content-Type': 'application/json',
+      'X-Strybok-Key': 'pk_test',
+    });
+    expect(response.headers?.get('Retry-After')).toBe('30');
+    expect(response.headers?.get('content-type')).toBe('application/json');
+    expect(response.headers?.get('broken')).toBeNull();
+    expect(response.headers?.get('X-Missing')).toBeNull();
+
+    for (const headers of [undefined, null]) {
+      const bare = await recorder({ status: 429, headers }).fetch('https://api.strybok.com/x', {
+        method: 'GET',
+        headers: {},
+      });
+      expect(bare.headers?.get('Retry-After')).toBeNull();
     }
   });
 
@@ -389,6 +425,15 @@ describe('createStrybok', () => {
     expect(App.calls).toEqual([]);
   });
 
+  it('passes clientKey through to createLink', async () => {
+    state.respond = () => ({
+      status: 201,
+      data: { linkId: 'l', slug: 's', routePath: '/a', url: `https://${host}/s` },
+    });
+    await create({ clientKey: 'pk_from_options' }).createLink('/a');
+    expect(state.requests[0]!.headers['X-Strybok-Key']).toBe('pk_from_options');
+  });
+
   it('dispose removes the plugin listener', async () => {
     const strybok = create();
     await strybok.initialize();
@@ -396,5 +441,262 @@ describe('createStrybok', () => {
     strybok.dispose();
     await settle();
     expect(App.listeners.size).toBe(0);
+  });
+});
+
+describe('createLink', () => {
+  const clientKey = 'pk_0123456789abcdefghijABCDEFGHIJ01';
+  const created: CreatedLink = {
+    linkId: 'link_9',
+    slug: 'aB3xY9',
+    routePath: '/product/42',
+    url: `https://${host}/aB3xY9`,
+  };
+  const linkRequests = () => state.requests.filter((r) => r.url.endsWith('/v1/public/links'));
+
+  function sdk(overrides: Partial<Parameters<typeof createStrybok>[0]> = {}): Strybok {
+    return create({ clientKey, timeoutMs: 60, retryDelayMs: 1, ...overrides });
+  }
+
+  const fail = (promise: Promise<unknown>) =>
+    promise.then(
+      () => {
+        throw new Error('Expected a failure');
+      },
+      (error: unknown) => error as StrybokError,
+    );
+
+  beforeEach(() => {
+    // Like the native plugin: JSON responses arrive already parsed.
+    state.respond = () => ({ status: 201, data: created });
+  });
+
+  it('sends the request through native HTTP with the client key header', async () => {
+    const link = await sdk().createLink('/product/42', {
+      payload: { productId: 42 },
+      title: 'Red shoes',
+      description: 'Look at these',
+      imageUrl: 'https://cdn.example.com/shoes.png',
+    });
+    expect(link).toEqual(created);
+    // One native request, the same path resolving takes; the plugin gets the JSON as a value.
+    expect(state.requests).toEqual([
+      {
+        url: `${apiBaseUrl}/v1/public/links`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'X-Strybok-Key': clientKey,
+        },
+        data: {
+          routePath: '/product/42',
+          payload: { productId: 42 },
+          title: 'Red shoes',
+          description: 'Look at these',
+          imageUrl: 'https://cdn.example.com/shoes.png',
+        },
+        responseType: 'text',
+      },
+    ]);
+  });
+
+  it('uses native HTTP on Android as well, and never the WebView fetch', async () => {
+    state.platform = 'android';
+    const originalFetch = globalThis.fetch;
+    let webViewCalls = 0;
+    globalThis.fetch = (() => {
+      webViewCalls++;
+      return Promise.resolve(new Response('', { status: 500 }));
+    }) as typeof fetch;
+    try {
+      expect(await sdk().createLink('/product/42')).toEqual(created);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    expect(webViewCalls).toBe(0);
+    expect(linkRequests()).toHaveLength(1);
+  });
+
+  it('accepts 200 (the link already existed) and a text response', async () => {
+    state.respond = () => ({ status: 200, data: JSON.stringify(created) });
+    expect(await sdk().createLink('/product/42')).toEqual(created);
+  });
+
+  it('omits the arguments that were not given', async () => {
+    const strybok = sdk();
+    await strybok.createLink('/product/42');
+    await strybok.createLink('/product/42', { title: 'Red shoes' });
+    expect(state.requests.map((r) => r.data)).toEqual([
+      { routePath: '/product/42' },
+      { routePath: '/product/42', title: 'Red shoes' },
+    ]);
+  });
+
+  it('works without initialize and without touching the App plugin', async () => {
+    await sdk().createLink('/product/42');
+    await settle();
+    expect(App.calls).toEqual([]);
+  });
+
+  it('is not called when the SDK starts or a link is delivered', async () => {
+    App.launchUrl = invite;
+    state.respond = (request) =>
+      request.url.endsWith('/v1/public/events')
+        ? { status: 202, data: '' }
+        : { status: 200, data: { linkId: 'l', appId: 'a', routePath: '/p/invite777' } };
+    const strybok = sdk();
+    const routes: string[] = [];
+    strybok.onLink((link) => routes.push(link.routePath));
+    await strybok.initialize();
+    await settle();
+    expect(routes).toEqual(['/p/invite777']);
+    expect(linkRequests()).toEqual([]);
+    for (const request of state.requests) {
+      expect(request.headers['X-Strybok-Key']).toBeUndefined();
+    }
+  });
+
+  it('fails before any native request without a clientKey or with bad arguments', async () => {
+    expect(await fail(sdk({ clientKey: undefined }).createLink('/product/42'))).toBeInstanceOf(
+      StrybokUnauthorizedError,
+    );
+    const strybok = sdk();
+    for (const routePath of ['product/42', '//product/42', `/${'a'.repeat(512)}`]) {
+      expect(await fail(strybok.createLink(routePath))).toBeInstanceOf(StrybokValidationError);
+    }
+    expect(
+      await fail(strybok.createLink('/product/42', { payload: [1] as unknown as object as never })),
+    ).toBeInstanceOf(StrybokValidationError);
+    expect(state.requests).toHaveLength(0);
+  });
+
+  it('maps the answers of the service to the typed errors', async () => {
+    state.respond = () => ({ status: 401, data: { error: { code: 'UNAUTHORIZED' } } });
+    expect(await fail(sdk().createLink('/product/42'))).toBeInstanceOf(StrybokUnauthorizedError);
+
+    state.respond = () => ({ status: 403, data: { error: { code: 'ROUTE_NOT_ALLOWED' } } });
+    const notAllowed = await fail(sdk().createLink('/admin'));
+    expect(notAllowed).toBeInstanceOf(RouteNotAllowedError);
+    expect((notAllowed as RouteNotAllowedError).routePath).toBe('/admin');
+
+    // iOS reports header names as sent, Android lower-cases them.
+    for (const name of ['Retry-After', 'retry-after']) {
+      state.respond = () => ({ status: 429, data: {}, headers: { [name]: '120' } });
+      const rateLimited = await fail(sdk().createLink('/product/42'));
+      expect(rateLimited).toBeInstanceOf(StrybokRateLimitedError);
+      expect((rateLimited as StrybokRateLimitedError).retryAfterSeconds).toBe(120);
+    }
+    state.respond = () => ({ status: 429 });
+    const noHeader = await fail(sdk().createLink('/product/42'));
+    expect(noHeader).toBeInstanceOf(StrybokRateLimitedError);
+    expect((noHeader as StrybokRateLimitedError).retryAfterSeconds).toBeUndefined();
+
+    for (const status of [400, 413, 422]) {
+      state.respond = () => ({
+        status,
+        data: {
+          error: {
+            message: 'Request validation failed',
+            details: { issues: [{ path: 'title', message: 'Too long' }] },
+          },
+        },
+      });
+      const invalid = (await fail(sdk().createLink('/product/42'))) as StrybokValidationError;
+      expect(invalid).toBeInstanceOf(StrybokValidationError);
+      expect(invalid.statusCode).toBe(status);
+      expect(invalid.message).toBe('Request validation failed');
+      expect(invalid.issues).toEqual([{ path: 'title', message: 'Too long' }]);
+    }
+
+    state.respond = () => ({ status: 404, data: '' });
+    const notFound = await fail(sdk().createLink('/product/42'));
+    expect(notFound).toBeInstanceOf(StrybokServerError);
+    expect((notFound as StrybokServerError).statusCode).toBe(404);
+
+    state.respond = () => ({ status: 201, data: { ...created, url: 'http://insecure.example/x' } });
+    const unreadable = await fail(sdk().createLink('/product/42'));
+    expect(unreadable).toBeInstanceOf(StrybokServerError);
+    expect((unreadable as StrybokServerError).statusCode).toBe(201);
+
+    // None of these is retried: one native request each.
+    expect(linkRequests()).toHaveLength(10);
+  });
+
+  it('retries 5xx, plugin failures and timeouts with identical data', async () => {
+    state.respond = () => ({ status: 503, data: '' });
+    const server = await fail(sdk().createLink('/product/42', { payload: { a: 1 } }));
+    expect(server).toBeInstanceOf(StrybokServerError);
+    expect((server as StrybokServerError).statusCode).toBe(503);
+    expect(state.requests).toHaveLength(3);
+    expect(state.requests[1]).toEqual(state.requests[0]);
+    expect(state.requests[2]).toEqual(state.requests[0]);
+    expect(JSON.stringify(state.requests[1]!.data)).toBe(JSON.stringify(state.requests[0]!.data));
+
+    state.requests = [];
+    state.respond = () =>
+      Promise.reject(new Error('The Internet connection appears to be offline'));
+    expect(await fail(sdk().createLink('/product/42'))).toBeInstanceOf(StrybokNetworkError);
+    expect(state.requests).toHaveLength(3);
+
+    state.requests = [];
+    state.respond = () => new Promise(() => {});
+    expect(await fail(sdk({ timeoutMs: 15 }).createLink('/product/42'))).toBeInstanceOf(
+      StrybokTimeoutError,
+    );
+    expect(state.requests).toHaveLength(3);
+
+    state.requests = [];
+    state.respond = () =>
+      state.requests.length === 1 ? { status: 500 } : { status: 201, data: created };
+    expect(await sdk().createLink('/product/42')).toEqual(created);
+    expect(state.requests).toHaveLength(2);
+  });
+
+  it('keeps the key and the payload out of errors and away from onError', async () => {
+    const reported: StrybokError[] = [];
+    const secret = 'do-not-leak-this-payload-value';
+    const answers: (() => ReturnType<CapacitorHttpLike['request']>)[] = [
+      () => Promise.resolve({ status: 401 }),
+      () => Promise.resolve({ status: 403 }),
+      () => Promise.resolve({ status: 429 }),
+      () => Promise.resolve({ status: 422 }),
+      () => Promise.resolve({ status: 500 }),
+      () => Promise.reject(new Error(`offline ${clientKey} ${secret}`)),
+    ];
+    for (const respond of answers) {
+      state.respond = respond;
+      const strybok = sdk({ onError: (error) => reported.push(error) });
+      const error = await fail(strybok.createLink('/product/42', { payload: { secret } }));
+      const text = `${String(error)} ${JSON.stringify(error)} ${String((error as StrybokNetworkError).cause)}`;
+      expect(text).not.toContain(clientKey);
+      expect(text).not.toContain(secret);
+    }
+    await settle();
+    expect(reported).toEqual([]);
+  });
+
+  it('uses the WebView fetch on the web platform, with the same request', async () => {
+    state.platform = 'web';
+    const calls: { url: string; init: RequestInit }[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = ((url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return Promise.resolve(new Response(JSON.stringify(created), { status: 201 }));
+    }) as typeof fetch;
+    try {
+      expect(await sdk().createLink('/product/42')).toEqual(created);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    expect(state.requests).toHaveLength(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(`${apiBaseUrl}/v1/public/links`);
+    expect(calls[0]!.init.headers).toMatchObject({
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'X-Strybok-Key': clientKey,
+    });
+    expect(calls[0]!.init.body).toBe('{"routePath":"/product/42"}');
   });
 });

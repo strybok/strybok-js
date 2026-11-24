@@ -16,7 +16,7 @@ its whole API.
 
 > **Status:** covered by unit tests (a port of the Flutter SDK's test suite, the reference test
 > list, plus tests of the URL parser, timing and delivery). Not verified on physical devices yet;
-> treat 0.1.x as an early release.
+> treat 0.x as an early release.
 >
 > Deferred deep linking is **not supported**: a link tapped before the app is installed is not
 > restored after installation.
@@ -78,14 +78,15 @@ and removes it from the queue, so combining both never navigates twice.
 
 ### API
 
-| Member              | Purpose                                                                                                          |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `initialize()`      | Subscribe to the link source, then handle the launch URL. Resolves when the launch link was handled. Idempotent. |
-| `onLink(listener)`  | Receive `ResolvedLink`s (`url`, `linkId`, `appId`, `routePath`, `payload`). Returns an unsubscribe function.     |
-| `getInitialLink()`  | The launch link, if no listener has received it yet; otherwise `null`.                                           |
-| `resolveUrl(url)`   | Resolve a URL explicitly (QR scanner, tests). Does not call listeners and does not report an app open.           |
-| `isStrybokUrl(url)` | Whether a URL is one of this app's links. No network call.                                                       |
-| `dispose()`         | Stop listening, cancel requests in flight, drop queued links. The instance cannot be reused.                     |
+| Member                            | Purpose                                                                                                          |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `initialize()`                    | Subscribe to the link source, then handle the launch URL. Resolves when the launch link was handled. Idempotent. |
+| `onLink(listener)`                | Receive `ResolvedLink`s (`url`, `linkId`, `appId`, `routePath`, `payload`). Returns an unsubscribe function.     |
+| `getInitialLink()`                | The launch link, if no listener has received it yet; otherwise `null`.                                           |
+| `resolveUrl(url)`                 | Resolve a URL explicitly (QR scanner, tests). Does not call listeners and does not report an app open.           |
+| `isStrybokUrl(url)`               | Whether a URL is one of this app's links. No network call.                                                       |
+| `createLink(routePath, options?)` | Create a short link to share (section 6). Resolves with `{ url, slug, routePath, linkId }`.                      |
+| `dispose()`                       | Stop listening, cancel requests in flight, drop queued links. The instance cannot be reused.                     |
 
 Details worth knowing:
 
@@ -94,7 +95,7 @@ Details worth knowing:
 - With several listeners, each one receives every link once.
 - An exception thrown by a listener or by `onError` does not stop delivery; it is rethrown from a
   timer so that it reaches your global error handler.
-- After `dispose()`, `initialize()`, `getInitialLink()` and `resolveUrl()` reject with a plain
+- After `dispose()`, `initialize()`, `getInitialLink()`, `resolveUrl()` and `createLink()` reject with a plain
   `Error`; `onLink()` does nothing.
 
 ### Options
@@ -112,6 +113,7 @@ Details worth knowing:
 | `dedupeWindowMs` | `2000`      | The identical URL received again within this window is dropped.                  |
 | `reportAppOpens` | `true`      | Send a best-effort `app_open` event after a link was resolved.                   |
 | `onError`        | none        | Receives errors for our links that could not be resolved.                        |
+| `clientKey`      | none        | Publishable client key `pk_…` of the application. Only needed for `createLink`.  |
 
 These are the options of the [SDK contract](./sdk-contract.md); durations carry an `Ms` suffix
 because they are plain numbers in JavaScript. Invalid options make the constructor throw
@@ -133,7 +135,7 @@ Anything rejected is ignored silently by the automatic flow and rejected with
 ### Errors
 
 `resolveUrl` rejects with, and `onError` receives, a `StrybokError`. Every error has `name`,
-`kind` and, when known, `url`.
+`kind` and, when known, `url`. The errors of `createLink` are listed in section 6.
 
 | Class                  | `kind`             | Meaning                                                                                     |
 | ---------------------- | ------------------ | ------------------------------------------------------------------------------------------- |
@@ -275,9 +277,12 @@ const transport: FetchLike = async (url, { method, headers, body, signal }) => {
 };
 ```
 
-Only `status` and `text()` of the response are used. The SDK sends two kinds of request:
-`GET .../v1/public/resolve?url=...` with `Accept: application/json`, and
-`POST .../v1/public/events` with a JSON string body. `signal` is an `AbortSignal` (when the
+Only `status` and `text()` of the response are used, plus `headers.get('Retry-After')` when the
+response has `headers` (optional; it fills `retryAfterSeconds` of a rate-limited `createLink`).
+The SDK sends three kinds of request: `GET .../v1/public/resolve?url=...` with
+`Accept: application/json`, `POST .../v1/public/events` with a JSON string body, and, only when
+you call `createLink`, `POST .../v1/public/links` with a JSON string body and the `X-Strybok-Key`
+header. `signal` is an `AbortSignal` (when the
 runtime has `AbortController`) that is aborted on timeout and on `dispose()`; a transport that
 ignores it still times out correctly, the request is just not cancelled.
 
@@ -288,19 +293,73 @@ surface as `StrybokNetworkError`. Sending requests natively avoids the preflight
 `@strybok/capacitor` does this for you; on Cordova you can wrap a native HTTP plugin as shown
 above. React Native and NativeScript are not affected (their `fetch` is not a browser).
 
-## 6. Treat routes as untrusted input
+## 6. Create a link to share
+
+`createLink` asks the service for a short link to a screen of your app, for a "Share" button:
+
+```ts
+const strybok = new Strybok({
+  apiBaseUrl: 'https://api.strybok.com',
+  allowedHosts: ['my-app.strybok.link'],
+  linkSource,
+  clientKey: 'pk_...', // the application's publishable client key
+});
+
+const link = await strybok.createLink('/product/42', {
+  payload: { productId: 42 },
+  title: 'Red shoes',
+  description: 'Look at these',
+  imageUrl: 'https://cdn.example.com/shoes.png',
+});
+await share(link.url); // also: link.slug, link.routePath, link.linkId
+```
+
+**Enable it first.** In the dashboard, open the application, switch on "Links from the app" and
+list the route patterns the app may create links for. The page shows the publishable client key
+(`pk_…`) to pass as `clientKey`. The key is safe to ship inside the app: it can only create links
+for those route patterns. Never put a secret API key (`lb_…`) into an app.
+
+- Only `routePath` is required; `payload` (a JSON object), `title`, `description` and `imageUrl`
+  are optional, and what you leave out is not sent.
+- Creating the same link again (same route, payload, title, description and image) returns the
+  existing link instead of making a second one.
+- It runs only when you call it. It does not need `initialize()` and is never part of the app's
+  start.
+- It uses the same `timeoutMs`, `maxRetries` and `retryDelayMs` as resolving: timeouts, network
+  errors and 5xx are retried with an identical request, 4xx (including 429) never.
+- After `dispose()` it rejects with a plain `Error`.
+
+It rejects with a `StrybokError`; these errors are never passed to `onError`, which is for
+incoming links, and never contain the client key or the payload.
+
+| Class                      | `kind`              | Meaning                                                                                                                                                               |
+| -------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `StrybokUnauthorizedError` | `unauthorized`      | No `clientKey` configured (no request is made), or 401: the key is wrong or was replaced, or the feature is switched off.                                             |
+| `RouteNotAllowedError`     | `route_not_allowed` | 403: the route is not covered by the application's route patterns. `routePath` holds the route.                                                                       |
+| `StrybokRateLimitedError`  | `rate_limited`      | 429: too many requests, or the app's daily limit of new links is reached. `retryAfterSeconds` holds the `Retry-After` header, if any.                                 |
+| `StrybokValidationError`   | `validation`        | Rejected before sending (`routePath` must start with one `/` and be at most 512 characters; `payload` must be a JSON object), or 400/413/422. `statusCode`, `issues`. |
+| `StrybokNetworkError`      | `network`           | The request could not be completed, after all retries. `cause` is not set here.                                                                                       |
+| `StrybokTimeoutError`      | `timeout`           | No answer in time, after all retries.                                                                                                                                 |
+| `StrybokServerError`       | `server`            | 5xx after all retries, any other status, or a success answer that cannot be read. `statusCode` holds the status.                                                      |
+
+`StrybokRateLimitedError`, `StrybokNetworkError`, `StrybokTimeoutError` and `StrybokServerError`
+are temporary: let the user try again later (after `retryAfterSeconds` when present).
+`StrybokUnauthorizedError`, `RouteNotAllowedError` and `StrybokValidationError` do not go away by
+retrying; the app or the dashboard settings need a change.
+
+## 7. Treat routes as untrusted input
 
 `routePath` and `payload` are data from the network, chosen by whoever created the link. Match the
 route against routes your app knows before navigating, and never execute payload contents. The SDK
 only guarantees that `routePath` starts with a single `/`.
 
-## 7. Links that arrive before sign-in
+## 8. Links that arrive before sign-in
 
 If a link needs an authenticated user, remember the route and open it after login instead of
 dropping it. Because links are queued until the first listener attaches, another option is to
 attach the listener only once the user is signed in.
 
-## 8. Analytics and privacy
+## 9. Analytics and privacy
 
 After a link is delivered (or queued) the SDK sends one best-effort `app_open` event
 (`POST /v1/public/events`) containing a random event id, the link id, the platform and the SDK
@@ -313,7 +372,7 @@ device.
 The event id is a random UUID v4, generated with `crypto.getRandomValues` where available and
 with `Math.random` otherwise. It only de-duplicates events and is not a security token.
 
-## 9. Testing your integration
+## 10. Testing your integration
 
 `@strybok/js/testing` provides `FakeLinkSource`:
 

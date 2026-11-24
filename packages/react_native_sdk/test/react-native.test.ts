@@ -7,9 +7,19 @@ import {
   LinkNotFoundError,
   REACT_NATIVE_SDK_VERSION,
   reactNativeLinkSource,
+  RouteNotAllowedError,
   Strybok,
   StrybokError,
+  StrybokNetworkError,
+  StrybokRateLimitedError,
+  StrybokServerError,
+  StrybokTimeoutError,
+  StrybokUnauthorizedError,
+  StrybokValidationError,
   useStrybokLink,
+  type CreatedLink,
+  type FetchRequestInit,
+  type FetchResponseLike,
   type LinkingLike,
   type ResolvedLink,
 } from '../src/index.js';
@@ -215,6 +225,227 @@ describe('createStrybok', () => {
     const error = await strybok.resolveUrl(invite).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(LinkNotFoundError);
     expect(error).toBeInstanceOf(StrybokError);
+  });
+});
+
+describe('createLink', () => {
+  const clientKey = 'pk_0123456789abcdefghijABCDEFGHIJ01';
+  const created: CreatedLink = {
+    linkId: 'link_9',
+    slug: 'aB3xY9',
+    routePath: '/product/42',
+    url: `https://${host}/aB3xY9`,
+  };
+
+  function answer(
+    status: number,
+    body: unknown = '',
+    headers?: Record<string, string>,
+  ): FetchResponseLike {
+    return {
+      status,
+      text: () => Promise.resolve(typeof body === 'string' ? body : JSON.stringify(body)),
+      ...(headers ? { headers: new Headers(headers) } : {}),
+    };
+  }
+
+  /** A `createStrybok` instance whose transport records requests and answers with `respond`. */
+  function setup(
+    respond: (attempt: number) => FetchResponseLike | Promise<FetchResponseLike> = () =>
+      answer(201, created),
+    overrides: Partial<Parameters<typeof createStrybok>[0]> = {},
+  ) {
+    const calls: { url: string; init: FetchRequestInit }[] = [];
+    const { strybok } = create({
+      clientKey,
+      timeoutMs: 60,
+      retryDelayMs: 1,
+      fetch: (url, init) => {
+        calls.push({ url, init });
+        return Promise.resolve().then(() => respond(calls.length));
+      },
+      ...overrides,
+    });
+    return { calls, strybok };
+  }
+
+  const fail = (promise: Promise<unknown>) =>
+    promise.then(
+      () => {
+        throw new Error('Expected a failure');
+      },
+      (error: unknown) => error as StrybokError,
+    );
+
+  it('passes clientKey from createStrybok and returns the created link', async () => {
+    const { calls, strybok } = setup();
+    const link = await strybok.createLink('/product/42', {
+      payload: { productId: 42 },
+      title: 'Red shoes',
+      description: 'Look at these',
+      imageUrl: 'https://cdn.example.com/shoes.png',
+    });
+    expect(link).toEqual(created);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(`${apiBaseUrl}/v1/public/links`);
+    expect(calls[0]!.init.method).toBe('POST');
+    expect(calls[0]!.init.headers).toEqual({
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'X-Strybok-Key': clientKey,
+    });
+    expect(JSON.parse(calls[0]!.init.body!)).toEqual({
+      routePath: '/product/42',
+      payload: { productId: 42 },
+      title: 'Red shoes',
+      description: 'Look at these',
+      imageUrl: 'https://cdn.example.com/shoes.png',
+    });
+  });
+
+  it('accepts 200 (the link already existed) and omits what was not given', async () => {
+    const { calls, strybok } = setup(() => answer(200, created));
+    expect(await strybok.createLink('/product/42')).toEqual(created);
+    expect(calls[0]!.init.body).toBe('{"routePath":"/product/42"}');
+  });
+
+  it('works without initialize and without touching Linking', async () => {
+    const { strybok } = setup();
+    await strybok.createLink('/product/42');
+    await settle();
+    expect(Linking.calls).toEqual([]);
+  });
+
+  it('is not called when the SDK starts or a link is delivered', async () => {
+    Linking.initialUrl = invite;
+    const api = fakeApi();
+    const { strybok } = create({ clientKey, fetch: api.fetch });
+    const routes: string[] = [];
+    strybok.onLink((link) => routes.push(link.routePath));
+    await strybok.initialize();
+    await settle();
+    expect(routes).toEqual(['/p/invite777']);
+    expect(api.resolves.filter((url) => url.includes('/v1/public/links'))).toEqual([]);
+  });
+
+  it('fails before any network call without a clientKey or with bad arguments', async () => {
+    const without = setup(undefined, { clientKey: undefined });
+    expect(await fail(without.strybok.createLink('/product/42'))).toBeInstanceOf(
+      StrybokUnauthorizedError,
+    );
+    expect(without.calls).toHaveLength(0);
+
+    const { calls, strybok } = setup();
+    for (const routePath of ['product/42', '//product/42', `/${'a'.repeat(512)}`]) {
+      expect(await fail(strybok.createLink(routePath))).toBeInstanceOf(StrybokValidationError);
+    }
+    expect(
+      await fail(strybok.createLink('/product/42', { payload: [1] as unknown as object as never })),
+    ).toBeInstanceOf(StrybokValidationError);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('maps the answers of the service to the typed errors', async () => {
+    const unauthorized = setup(() => answer(401));
+    expect(await fail(unauthorized.strybok.createLink('/product/42'))).toBeInstanceOf(
+      StrybokUnauthorizedError,
+    );
+    expect(unauthorized.calls).toHaveLength(1);
+
+    const forbidden = setup(() => answer(403));
+    const notAllowed = await fail(forbidden.strybok.createLink('/admin'));
+    expect(notAllowed).toBeInstanceOf(RouteNotAllowedError);
+    expect((notAllowed as RouteNotAllowedError).routePath).toBe('/admin');
+    expect(forbidden.calls).toHaveLength(1);
+
+    const limited = setup(() => answer(429, '', { 'Retry-After': '120' }));
+    const rateLimited = await fail(limited.strybok.createLink('/product/42'));
+    expect(rateLimited).toBeInstanceOf(StrybokRateLimitedError);
+    expect((rateLimited as StrybokRateLimitedError).retryAfterSeconds).toBe(120);
+    expect(limited.calls).toHaveLength(1);
+
+    const noHeader = setup(() => answer(429));
+    expect(
+      ((await fail(noHeader.strybok.createLink('/product/42'))) as StrybokRateLimitedError)
+        .retryAfterSeconds,
+    ).toBeUndefined();
+
+    for (const status of [400, 413, 422]) {
+      const rejected = setup(() =>
+        answer(status, {
+          error: {
+            message: 'Request validation failed',
+            details: { issues: [{ path: 'title', message: 'Too long' }] },
+          },
+        }),
+      );
+      const invalid = (await fail(
+        rejected.strybok.createLink('/product/42'),
+      )) as StrybokValidationError;
+      expect(invalid).toBeInstanceOf(StrybokValidationError);
+      expect(invalid.statusCode).toBe(status);
+      expect(invalid.message).toBe('Request validation failed');
+      expect(invalid.issues).toEqual([{ path: 'title', message: 'Too long' }]);
+      expect(rejected.calls).toHaveLength(1);
+    }
+
+    const other = setup(() => answer(404));
+    const notFound = await fail(other.strybok.createLink('/product/42'));
+    expect(notFound).toBeInstanceOf(StrybokServerError);
+    expect((notFound as StrybokServerError).statusCode).toBe(404);
+    expect(other.calls).toHaveLength(1);
+
+    const malformed = setup(() => answer(201, { ...created, url: 'http://insecure.example/x' }));
+    const unreadable = await fail(malformed.strybok.createLink('/product/42'));
+    expect(unreadable).toBeInstanceOf(StrybokServerError);
+    expect((unreadable as StrybokServerError).statusCode).toBe(201);
+    expect(malformed.calls).toHaveLength(1);
+  });
+
+  it('retries 5xx, network failures and timeouts with an identical body', async () => {
+    const down = setup(() => answer(503));
+    const server = await fail(down.strybok.createLink('/product/42', { payload: { a: 1 } }));
+    expect(server).toBeInstanceOf(StrybokServerError);
+    expect((server as StrybokServerError).statusCode).toBe(503);
+    expect(down.calls).toHaveLength(3);
+    expect(new Set(down.calls.map((call) => call.init.body)).size).toBe(1);
+
+    const offline = setup(() => Promise.reject(new TypeError('Network request failed')));
+    expect(await fail(offline.strybok.createLink('/product/42'))).toBeInstanceOf(
+      StrybokNetworkError,
+    );
+    expect(offline.calls).toHaveLength(3);
+
+    const silent = setup(() => new Promise<FetchResponseLike>(() => {}), { timeoutMs: 15 });
+    expect(await fail(silent.strybok.createLink('/product/42'))).toBeInstanceOf(
+      StrybokTimeoutError,
+    );
+    expect(silent.calls).toHaveLength(3);
+
+    const recovering = setup((attempt) => (attempt === 1 ? answer(500) : answer(201, created)));
+    expect(await recovering.strybok.createLink('/product/42')).toEqual(created);
+    expect(recovering.calls).toHaveLength(2);
+  });
+
+  it('keeps the key and the payload out of errors and away from onError', async () => {
+    const reported: StrybokError[] = [];
+    const secret = 'do-not-leak-this-payload-value';
+    for (const respond of [
+      () => answer(401),
+      () => answer(403),
+      () => answer(429),
+      () => answer(422),
+      () => answer(500),
+      () => Promise.reject(new Error('offline')),
+    ]) {
+      const { strybok } = setup(respond, { onError: (error) => reported.push(error) });
+      const error = await fail(strybok.createLink('/product/42', { payload: { secret } }));
+      const text = `${String(error)} ${JSON.stringify(error)} ${String((error as StrybokNetworkError).cause)}`;
+      expect(text).not.toContain(clientKey);
+      expect(text).not.toContain(secret);
+    }
+    await settle();
+    expect(reported).toEqual([]);
   });
 });
 
