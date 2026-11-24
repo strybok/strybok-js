@@ -1,9 +1,26 @@
 {
   "name": "@strybok/capacitor",
-  "private": true,
   "version": "0.1.0",
   "description": "Strybok deep-link SDK for Capacitor and Ionic: resolves Universal Links / App Links to an in-app route and delivers each link exactly once.",
   "license": "Apache-2.0",
+  "homepage": "https://strybok.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/strybok/strybok-js.git",
+    "directory": "packages/capacitor_sdk"
+  },
+  "bugs": "https://github.com/strybok/strybok-js/issues",
+  "keywords": [
+    "deep-links",
+    "universal-links",
+    "app-links",
+    "strybok",
+    "capacitor",
+    "ionic"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "sideEffects": false,
   "main": "./dist/index.js",
@@ -34,7 +51,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@strybok/js": "workspace:*"
+    "@strybok/js": "workspace:^"
   },
   "peerDependencies": {
     "@capacitor/app": ">=5",
