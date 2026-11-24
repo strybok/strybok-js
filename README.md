@@ -14,21 +14,11 @@ devices. Deferred deep linking is not supported.
 
 ## Install
 
-The packages are **not published to npm yet**. Until they are, build tarballs from this
-repository (Node.js 22+ and pnpm) and install those in your app:
-
 ```sh
-git clone https://github.com/strybok/strybok-js
-cd strybok-js
-pnpm install && pnpm build
-(cd packages/js_sdk && pnpm pack)             # strybok-js-0.1.0.tgz
-(cd packages/react_native_sdk && pnpm pack)   # strybok-react-native-0.1.0.tgz
-(cd packages/capacitor_sdk && pnpm pack)      # strybok-capacitor-0.1.0.tgz
+npm install @strybok/react-native   # React Native and Expo
+npm install @strybok/capacitor      # Capacitor and Ionic
+npm install @strybok/js             # other JavaScript runtimes
 ```
-
-`@strybok/react-native` and `@strybok/capacitor` depend on `@strybok/js`, so install the
-core tarball together with the adapter tarball in one `npm install` command. Each guide
-has the exact lines.
 
 ## Development
 

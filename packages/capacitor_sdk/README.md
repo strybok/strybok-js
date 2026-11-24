@@ -26,26 +26,14 @@ origins.
 Full guide, native setup and troubleshooting:
 [`docs/capacitor.md`](../../docs/capacitor.md).
 
-- **Not published to npm yet**: covered by unit tests with fake plugins only. It has not been run
+- **Early release (0.1.x)**: covered by unit tests with fake plugins only. It has not been run
   inside a real Capacitor app, nor on a physical device.
 - Deferred deep linking is not supported.
 
 ## Install
 
-`npm install @strybok/capacitor` will work only after publication. Until then, build tarballs from
-`https://github.com/strybok/strybok-js`. The package depends on `@strybok/js`, which is not on
-npm either, so both tarballs are needed:
-
 ```sh
-git clone https://github.com/strybok/strybok-js
-cd strybok-js
-pnpm install && pnpm build
-(cd packages/js_sdk && pnpm pack)
-(cd packages/capacitor_sdk && pnpm pack)
-
-# in your app, both in one command
-npm install /path/to/strybok-js/packages/js_sdk/strybok-js-0.1.0.tgz \
-  /path/to/strybok-js/packages/capacitor_sdk/strybok-capacitor-0.1.0.tgz
+npm install @strybok/capacitor
 ```
 
 ## Development

@@ -9,7 +9,7 @@ JavaScript, no native module, so there is nothing to link and no Expo config plu
 
 > **Status:** covered by unit tests that use a fake `Linking` module and a fake hooks runtime.
 > It has **not** been run inside a real React Native or Expo app and not on a physical device
-> (see the [manual test plan](./manual-test-plan.md)), and is therefore not published to npm.
+> (see the [manual test plan](./manual-test-plan.md)); treat 0.1.x as an early release.
 > The native snippets below follow the React Native and Expo documentation; verify them against
 > the versions you use.
 >
@@ -26,27 +26,9 @@ JavaScript, no native module, so there is nothing to link and no Expo config plu
 
 ## 2. Add the package
 
-`@strybok/react-native` is **not on npm yet**, so `npm install @strybok/react-native` does not work today. Until it
-is published, build tarballs from the repository (needs Node.js 22+ and pnpm). `@strybok/react-native`
-depends on `@strybok/js`, which is not on npm either, so you need both:
-
 ```sh
-git clone https://github.com/strybok/strybok-js
-cd strybok-js
-pnpm install && pnpm build
-(cd packages/js_sdk && pnpm pack)             # writes strybok-js-0.1.0.tgz
-(cd packages/react_native_sdk && pnpm pack)   # writes strybok-react-native-0.1.0.tgz
+npm install @strybok/react-native
 ```
-
-Install both tarballs in your app with one command, so the dependency on `@strybok/js` is
-satisfied by the local file instead of the registry:
-
-```sh
-npm install /path/to/strybok-js/packages/js_sdk/strybok-js-0.1.0.tgz \
-  /path/to/strybok-js/packages/react_native_sdk/strybok-react-native-0.1.0.tgz
-```
-
-After publication this becomes `npm install @strybok/react-native`.
 
 Peer dependencies: `react` and `react-native` 0.65 or newer (the SDK also falls back to the older
 `Linking.removeEventListener`). The packages are ESM with an `exports` map; Metro resolves the

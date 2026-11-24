@@ -25,26 +25,14 @@ function App() {
 Full guide, native setup (bare React Native and Expo) and troubleshooting:
 [`docs/react-native.md`](../../docs/react-native.md).
 
-- **Not published to npm yet**: covered by unit tests with fake `Linking` and fake hooks only. It
+- **Early release (0.1.x)**: covered by unit tests with fake `Linking` and fake hooks only. It
   has not been run inside a real React Native or Expo app, nor on a physical device.
 - Deferred deep linking is not supported.
 
 ## Install
 
-`npm install @strybok/react-native` will work only after publication. Until then, build tarballs from
-`https://github.com/strybok/strybok-js`. The package depends on `@strybok/js`, which is not on
-npm either, so both tarballs are needed:
-
 ```sh
-git clone https://github.com/strybok/strybok-js
-cd strybok-js
-pnpm install && pnpm build
-(cd packages/js_sdk && pnpm pack)
-(cd packages/react_native_sdk && pnpm pack)
-
-# in your app, both in one command
-npm install /path/to/strybok-js/packages/js_sdk/strybok-js-0.1.0.tgz \
-  /path/to/strybok-js/packages/react_native_sdk/strybok-react-native-0.1.0.tgz
+npm install @strybok/react-native
 ```
 
 ## Development

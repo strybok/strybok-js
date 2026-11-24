@@ -15,8 +15,8 @@ custom WebView shell, ...). For React Native and Expo use
 its whole API.
 
 > **Status:** covered by unit tests (a port of the Flutter SDK's test suite, the reference test
-> list, plus tests of the URL parser, timing and delivery). Not verified on physical devices and
-> therefore not published to npm yet.
+> list, plus tests of the URL parser, timing and delivery). Not verified on physical devices yet;
+> treat 0.1.x as an early release.
 >
 > Deferred deep linking is **not supported**: a link tapped before the app is installed is not
 > restored after installation.
@@ -31,23 +31,9 @@ its whole API.
 
 ## 2. Add the package
 
-`@strybok/js` is **not on npm yet**, so `npm install @strybok/js` does not work today. Until it
-is published, build a tarball from the repository (needs Node.js 22+ and pnpm):
-
 ```sh
-git clone https://github.com/strybok/strybok-js
-cd strybok-js
-pnpm install && pnpm build
-(cd packages/js_sdk && pnpm pack)   # writes packages/js_sdk/strybok-js-0.1.0.tgz
+npm install @strybok/js
 ```
-
-and install it in your app:
-
-```sh
-npm install /path/to/strybok-js/packages/js_sdk/strybok-js-0.1.0.tgz
-```
-
-After publication this becomes `npm install @strybok/js`.
 
 The package is ESM only, has no dependencies and needs these from the runtime: `Promise`,
 `setTimeout`, `JSON`, `encodeURIComponent`, and either a global `fetch` or the `fetch` option.

@@ -10,7 +10,7 @@ native code of its own.
 
 > **Status:** covered by unit tests that use fake `App` and `CapacitorHttp` plugins. It has
 > **not** been run inside a real Capacitor app and not on a physical device (see the
-> [manual test plan](./manual-test-plan.md)), and is therefore not published to npm. Verify the
+> [manual test plan](./manual-test-plan.md)); treat 0.1.x as an early release. Verify the
 > native behaviour described here against the Capacitor version you use.
 >
 > Deferred deep linking is **not supported**: a link tapped before the app is installed is not
@@ -27,31 +27,9 @@ native code of its own.
 ## 2. Add the packages
 
 ```sh
-npm install @capacitor/app
+npm install @strybok/capacitor @capacitor/app
 npx cap sync
 ```
-
-`@strybok/capacitor` is **not on npm yet**, so `npm install @strybok/capacitor` does not work today. Until it
-is published, build tarballs from the repository (needs Node.js 22+ and pnpm). `@strybok/capacitor`
-depends on `@strybok/js`, which is not on npm either, so you need both:
-
-```sh
-git clone https://github.com/strybok/strybok-js
-cd strybok-js
-pnpm install && pnpm build
-(cd packages/js_sdk && pnpm pack)             # writes strybok-js-0.1.0.tgz
-(cd packages/capacitor_sdk && pnpm pack)   # writes strybok-capacitor-0.1.0.tgz
-```
-
-Install both tarballs in your app with one command, so the dependency on `@strybok/js` is
-satisfied by the local file instead of the registry:
-
-```sh
-npm install /path/to/strybok-js/packages/js_sdk/strybok-js-0.1.0.tgz \
-  /path/to/strybok-js/packages/capacitor_sdk/strybok-capacitor-0.1.0.tgz
-```
-
-After publication this becomes `npm install @strybok/capacitor`.
 
 Peer dependencies: `@capacitor/core` and `@capacitor/app`, version 5 or newer.
 

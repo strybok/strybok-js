@@ -27,23 +27,14 @@ Full guide, including how to write a `LinkSource`:
 [`docs/javascript.md`](../../docs/javascript.md). Behaviour is defined by
 the [SDK contract](../../docs/sdk-contract.md).
 
-- **Not published to npm yet**: covered by unit tests only; verification on physical devices is
+- **Early release (0.1.x)**: covered by unit tests only; verification on physical devices is
   still pending.
 - Deferred deep linking is not supported.
 
 ## Install
 
-`npm install @strybok/js` will work only after publication. Until then, build a tarball from
-`https://github.com/strybok/strybok-js` and install that:
-
 ```sh
-git clone https://github.com/strybok/strybok-js
-cd strybok-js
-pnpm install && pnpm build
-(cd packages/js_sdk && pnpm pack)   # writes strybok-js-0.1.0.tgz
-
-# in your app
-npm install /path/to/strybok-js/packages/js_sdk/strybok-js-0.1.0.tgz
+npm install @strybok/js
 ```
 
 ## Development
