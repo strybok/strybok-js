@@ -4,8 +4,11 @@
  * A thin adapter over `@strybok/js`: links come from the `@capacitor/app` plugin, the platform
  * from `Capacitor.getPlatform()`, and requests go through `CapacitorHttp` on iOS and Android.
  *
- * Deferred deep linking (restoring a link after the app is installed from a store) is not
- * supported.
+ * Deferred links (restoring a link after the app is installed from a store) are optional and off
+ * by default (`deferredLinks`). This package has no native code and no store integration: the
+ * app supplies the install referrer (`installReferrerSources`), the pasted text on iOS
+ * (`redeemPastedLink`) and a persistent store (`deferredLinkStore`); without the store the
+ * feature stays disabled.
  */
 import { App } from '@capacitor/app';
 import { Capacitor, CapacitorHttp } from '@capacitor/core';

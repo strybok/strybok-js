@@ -18,8 +18,10 @@ its whole API.
 > list, plus tests of the URL parser, timing and delivery). Not verified on physical devices yet;
 > treat 0.x as an early release.
 >
-> Deferred deep linking is **not supported**: a link tapped before the app is installed is not
-> restored after installation.
+> Deferred links (a link tapped before the app is installed, restored after installation) are
+> **optional, off by default and not verified on a device**. This package has no native code, so
+> your app supplies the store's install referrer (Android) or the text the person pasted (iOS):
+> see [Deferred links](#deferred-links-optional).
 
 ## 1. Prerequisites
 
@@ -76,17 +78,55 @@ again later is a new delivery.
 Prefer to read the launch link yourself? `await strybok.getInitialLink()` returns it at most once
 and removes it from the queue, so combining both never navigates twice.
 
+### Campaign values
+
+Every `ResolvedLink` has `campaign`: an object with the optional strings `source`, `medium`,
+`campaign`, `term` and `content` (type `LinkCampaign`). It is never `null`; a value that is not
+set is absent, and the object is empty when there are none.
+
+```ts
+strybok.onLink((link) => {
+  analytics.track('link_opened', {
+    source: link.campaign.source, // 'instagram', or undefined
+    campaign: link.campaign.campaign,
+  });
+  router.push(link.routePath);
+});
+```
+
+- **Where the values come from.** A link can have default values, set per link in the dashboard
+  ("Campaign (optional)" in the link form). The `utm_source`, `utm_medium`, `utm_campaign`,
+  `utm_term` and `utm_content` parameters of the URL that was tapped override them one by one:
+  if the link's default source is `newsletter`,
+  `https://my-app.strybok.link/invite777?utm_source=instagram` arrives with the source
+  `instagram` and the link's other defaults. A parameter can replace a default but
+  not clear it.
+- **Which values are accepted.** 1–64 characters of letters, digits, `.`, `_`, `~` and `-`.
+  Anything else (a space, `+`, letters outside ASCII) is dropped as if the parameter were absent,
+  without an error: write `spring_sale`, not `spring sale`.
+- **They are untrusted labels.** Whoever shares a link can put any `utm_*` values on it. Use them
+  for attribution, never to grant anything or to decide what the user may see.
+- **What is sent.** Of the tapped URL's query only these five parameters are sent when resolving,
+  and the resolved values are reported with the `app_open` event (section "Analytics and
+  privacy"); every other parameter and the fragment stay on the device. In the dashboard, a link's analytics has a "Campaigns" breakdown of opens
+  by source, medium and campaign.
+
 ### API
 
-| Member                            | Purpose                                                                                                          |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `initialize()`                    | Subscribe to the link source, then handle the launch URL. Resolves when the launch link was handled. Idempotent. |
-| `onLink(listener)`                | Receive `ResolvedLink`s (`url`, `linkId`, `appId`, `routePath`, `payload`). Returns an unsubscribe function.     |
-| `getInitialLink()`                | The launch link, if no listener has received it yet; otherwise `null`.                                           |
-| `resolveUrl(url)`                 | Resolve a URL explicitly (QR scanner, tests). Does not call listeners and does not report an app open.           |
-| `isStrybokUrl(url)`               | Whether a URL is one of this app's links. No network call.                                                       |
-| `createLink(routePath, options?)` | Create a short link to share (section 6). Resolves with `{ url, slug, routePath, linkId }`.                      |
-| `dispose()`                       | Stop listening, cancel requests in flight, drop queued links. The instance cannot be reused.                     |
+| Member                            | Purpose                                                                                                                                                        |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `initialize()`                    | Subscribe to the link source, then handle the launch URL. Resolves when the launch link was handled. Idempotent.                                               |
+| `onLink(listener)`                | Receive `ResolvedLink`s (`url`, `linkId`, `appId`, `routePath`, `payload`, `campaign`, `isDeferred`, `isProbabilisticMatch`). Returns an unsubscribe function. |
+| `getInitialLink()`                | The launch link, if no listener has received it yet; otherwise `null`.                                                                                         |
+| `resolveUrl(url)`                 | Resolve a URL explicitly (QR scanner, tests). Does not call listeners and does not report an app open.                                                         |
+| `isStrybokUrl(url)`               | Whether a URL is one of this app's links. No network call.                                                                                                     |
+| `createLink(routePath, options?)` | Create a short link to share (section 6). Resolves with `{ url, slug, routePath, linkId }`.                                                                    |
+| `dispose()`                       | Stop listening, cancel requests in flight, drop queued links. The instance cannot be reused.                                                                   |
+| `enableDeferredLinks()`           | Switch [deferred links](#deferred-links-optional) on after start, e.g. after a consent screen.                                                                 |
+| `redeemPastedLink(text)`          | iOS: exchange the link the person pasted. Resolves with a result string, never rejects.                                                                        |
+| `skipPastedLink()`                | iOS matching only: the person moved on without pasting.                                                                                                        |
+| `deferredLinkStatus`              | Where the deferred-link check stands; `'disabled'` by default.                                                                                                 |
+| `onDeferredLinkStatus(listener)`  | Observe that status. Returns an unsubscribe function.                                                                                                          |
 
 Details worth knowing:
 
@@ -100,20 +140,21 @@ Details worth knowing:
 
 ### Options
 
-| Option           | Default     | Meaning                                                                          |
-| ---------------- | ----------- | -------------------------------------------------------------------------------- |
-| `apiBaseUrl`     | required    | Base URL of the API, e.g. `https://api.strybok.com`. A path prefix is preserved. |
-| `allowedHosts`   | required    | Bare hostnames of this app's links (no scheme, no path). Compared lower-case.    |
-| `linkSource`     | required    | Where URLs come from (section 4).                                                |
-| `platform`       | `'unknown'` | Reported with `app_open` events: `'ios'`, `'android'` or `'unknown'`.            |
-| `fetch`          | global      | HTTP transport (section 5).                                                      |
-| `timeoutMs`      | `5000`      | Time allowed for one resolve attempt, including reading the body.                |
-| `maxRetries`     | `2`         | Extra attempts after a timeout, network error or 5xx. 4xx is never retried.      |
-| `retryDelayMs`   | `400`       | Pause before the first retry; doubles for each further retry.                    |
-| `dedupeWindowMs` | `2000`      | The identical URL received again within this window is dropped.                  |
-| `reportAppOpens` | `true`      | Send a best-effort `app_open` event after a link was resolved.                   |
-| `onError`        | none        | Receives errors for our links that could not be resolved.                        |
-| `clientKey`      | none        | Publishable client key `pk_…` of the application. Only needed for `createLink`.  |
+| Option           | Default     | Meaning                                                                                                                    |
+| ---------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `apiBaseUrl`     | required    | Base URL of the API, e.g. `https://api.strybok.com`. A path prefix is preserved.                                           |
+| `allowedHosts`   | required    | Bare hostnames of this app's links (no scheme, no path). Compared lower-case.                                              |
+| `linkSource`     | required    | Where URLs come from (section 4).                                                                                          |
+| `platform`       | `'unknown'` | Reported with `app_open` events: `'ios'`, `'android'` or `'unknown'`.                                                      |
+| `fetch`          | global      | HTTP transport (section 5).                                                                                                |
+| `timeoutMs`      | `5000`      | Time allowed for one resolve attempt, including reading the body.                                                          |
+| `maxRetries`     | `2`         | Extra attempts after a timeout, network error or 5xx. 4xx is never retried.                                                |
+| `retryDelayMs`   | `400`       | Pause before the first retry; doubles for each further retry.                                                              |
+| `dedupeWindowMs` | `2000`      | The identical URL received again within this window is dropped.                                                            |
+| `reportAppOpens` | `true`      | Send a best-effort `app_open` event after a link was resolved.                                                             |
+| `onError`        | none        | Receives errors for our links that could not be resolved.                                                                  |
+| `clientKey`      | none        | Publishable client key `pk_…` of the application. Only needed for `createLink`.                                            |
+| `deferredLinks`  | `false`     | Restore a link tapped before installation; see [Deferred links](#deferred-links-optional) for the options that go with it. |
 
 These are the options of the [SDK contract](./sdk-contract.md); durations carry an `Ms` suffix
 because they are plain numbers in JavaScript. Invalid options make the constructor throw
@@ -123,7 +164,9 @@ because they are plain numbers in JavaScript. Invalid options make the construct
 
 Exactly the contract's rules: `https`, host in `allowedHosts`, no `user:pass@`, no port or port
 443, and a path of one slug (`^/[A-Za-z0-9_-]{1,64}$`, no trailing slash). Query and fragment are
-allowed, ignored, and **never sent** to the API.
+allowed and do not decide whether a URL is accepted. Of the query only the five `utm_*` campaign
+parameters are sent to the API ([Campaign values](#campaign-values)); the rest of it and the
+fragment are **never sent**.
 
 The check uses a small strict parser of its own instead of the runtime's `URL` class, which is
 incomplete in some runtimes. It does not normalise anything and rejects what a lenient parser
@@ -349,9 +392,10 @@ retrying; the app or the dashboard settings need a change.
 
 ## 7. Treat routes as untrusted input
 
-`routePath` and `payload` are data from the network, chosen by whoever created the link. Match the
-route against routes your app knows before navigating, and never execute payload contents. The SDK
-only guarantees that `routePath` starts with a single `/`.
+`routePath`, `payload` and `campaign` are data from the network, chosen by whoever created or
+shared the link. Match the route against routes your app knows before navigating, never execute
+payload contents, and treat campaign values as labels only. The SDK only guarantees that
+`routePath` starts with a single `/`.
 
 ## 8. Links that arrive before sign-in
 
@@ -362,12 +406,20 @@ attach the listener only once the user is signed in.
 ## 9. Analytics and privacy
 
 After a link is delivered (or queued) the SDK sends one best-effort `app_open` event
-(`POST /v1/public/events`) containing a random event id, the link id, the platform and the SDK
-version, and nothing else: no device identifiers. It never delays navigation and all failures are
+(`POST /v1/public/events`) containing a random event id, the link id, the platform, the SDK
+version and the link's campaign values when it has any, and nothing else: no device identifiers. It never delays navigation and all failures are
 ignored. Disable it with `reportAppOpens: false`.
 
-Only the link's host and slug are sent to `resolve`; query parameters and fragments stay on the
+Only the link's host and slug are sent to `resolve`, plus the five `utm_*` campaign parameters of
+the tapped URL when their value passes the character rule
+([Campaign values](#campaign-values)). Every other query parameter and the fragment stay on the
 device.
+
+With `deferredLinks` switched on, the SDK additionally sends what
+[Deferred links](#deferred-links-optional) describes: the click id from the install referrer or
+from the pasted link with your app identifier, or — only with `allowProbabilisticMatching` — the
+bundle id, device family and language, which the server combines with the connection's IP
+address.
 
 The event id is a random UUID v4, generated with `crypto.getRandomValues` where available and
 with `Math.random` otherwise. It only de-duplicates events and is not a security token.
@@ -401,6 +453,169 @@ source.emit('https://my-app.strybok.link/other'); // link while running
 `new FakeLinkSource({ initialUrl, replayInitialUrlOnSubscribe: true })` mimics platforms that
 report the launch URL twice. The `now` option of `Strybok` replaces the clock used for
 de-duplication.
+
+## Deferred links (optional)
+
+A person taps a link, does not have the app, installs it and opens it: with deferred links the
+app can still receive that link. It is **off by default**, it is very different on Android and
+iOS, and **nothing of it has been verified on a device**. Read the platform side first — what
+the owner switches on in the dashboard, what the visitor sees and what it costs:
+[Android](./android.md#links-tapped-before-the-app-is-installed-deferred-links) and
+[iOS](./ios.md#links-tapped-before-the-app-is-installed). The exact behaviour is the
+[SDK contract](./sdk-contract.md#deferred-links-optional-android).
+
+**This package ships no native code and no store integration.** It contains the logic (when to
+ask, what to send, once only, a normal link wins) and its tests. Everything that touches the
+device comes from your app:
+
+| You pass                                                | Platform | What it is                                                                                                                                            |
+| ------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deferredLinks: true` (or call `enableDeferredLinks()`) | both     | The switch. Without it nothing below is read, stored or sent.                                                                                         |
+| `deferredLinkStore`                                     | both     | Persistent storage with `getItem(key)` and `setItem(key, value)` (sync or promise). **Required**: without it the status stays `disabled`.             |
+| `androidPackageName`                                    | Android  | Your application ID. Required on Android.                                                                                                             |
+| `installReferrerSources`                                | Android  | Functions that ask a store for its install referrer (below). Without any the check ends with `unavailable`.                                           |
+| `iosBundleId`                                           | iOS      | Your bundle identifier. Required on iOS.                                                                                                              |
+| the pasted text, to `redeemPastedLink(text)`            | iOS      | What the person pasted with your paste button. The SDK never reads the clipboard.                                                                     |
+| `allowProbabilisticMatching`, `deviceFamily`, `locale`  | iOS      | Only for probabilistic matching, which is **forbidden by Apple's rules** and not recommended (below).                                                 |
+| `pasteboardMayContainLink`                              | iOS      | Optional, matching only: answers whether the clipboard probably holds a URL **without reading it**; the SDK then waits for the paste before matching. |
+
+The store keeps two values, `strybok.deferred.attempts` and `strybok.deferred.done`, and nothing
+else — never the referrer, the pasted text or the click id. It must survive restarts and
+disappear with the app's data. The SDK deliberately has no in-memory fallback: state that is
+forgotten on restart would run the check again on every launch.
+
+A restored link arrives through `onLink` like any other, with `isDeferred: true`. Every
+`ResolvedLink` has `isDeferred` and `isProbabilisticMatch` (both `false` for ordinary links).
+`getInitialLink()` never returns a deferred link, no `app_open` event is sent for it, and
+nothing about the check is ever reported to `onError`.
+
+### Android: install referrer
+
+On the first launch after `initialize()` has finished (never before, and `initialize()` does not
+wait for it) the SDK asks your sources in order, looks for `strybok_click=dc_…` in the referrer
+string and exchanges that id once for the link (`POST /v1/public/deferred-links/redeem` with the
+id, `androidPackageName` and the SDK version — nothing else of the referrer is sent, stored or
+logged).
+
+```ts
+import { Strybok, type InstallReferrerSource } from '@strybok/js';
+
+// Yours to write: call the Play Install Referrer library from native code (see below).
+const playInstallReferrer: InstallReferrerSource = async () => {
+  const result = await myNativeBridge.getPlayInstallReferrer();
+  // Exactly one of these three answers:
+  if (result.ok) return { status: 'referrer', referrer: result.referrer }; // may be ''
+  if (result.retryLater) return { status: 'unavailableForNow' };
+  return { status: 'unavailable' };
+};
+
+const strybok = new Strybok({
+  apiBaseUrl: 'https://api.strybok.com',
+  allowedHosts: ['my-app.strybok.link'],
+  linkSource,
+  platform: 'android',
+  deferredLinks: true,
+  deferredLinkStore: myPersistentStore, // getItem / setItem
+  androidPackageName: 'com.example.app',
+  installReferrerSources: [playInstallReferrer],
+});
+```
+
+What the native side has to do for Google Play (library
+`com.android.installreferrer:installreferrer:2.2`, class `InstallReferrerClient`): call
+`startConnection`, and map the result of `onInstallReferrerSetupFinished` like this, always
+followed by `endConnection()`:
+
+| Result                                                                     | Answer                                                                     |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `OK` (0)                                                                   | `{ status: 'referrer', referrer: client.installReferrer.installReferrer }` |
+| `SERVICE_UNAVAILABLE` (1), `SERVICE_DISCONNECTED` (-1), a remote exception | `{ status: 'unavailableForNow' }`                                          |
+| `FEATURE_NOT_SUPPORTED` (2), `DEVELOPER_ERROR` (3)                         | `{ status: 'unavailable' }`                                                |
+
+A source that throws, rejects or takes longer than 10 seconds counts as "unavailable for now".
+The check is repeated on a later launch after a transient failure, at most three times per
+installation; then it is `failed` for good.
+
+Huawei AppGallery and Samsung Galaxy Store have their own referrer mechanisms (described in the
+contract). **They are unverified even in the native Strybok SDKs**; if you write sources for
+them, add them after the Play source.
+
+Reading the install referrer is access to information stored on the device. If your app needs
+consent first, leave `deferredLinks` off and call `strybok.enableDeferredLinks()` after the
+consent screen; that runs the check once.
+
+### iOS: the pasted link
+
+The App Store passes nothing to a newly installed app. With the owner's "copy and paste the
+link" option the visitor copies the link on a page before the App Store; in your app, a paste
+button of yours hands the text over:
+
+```ts
+const result = await strybok.redeemPastedLink(pastedText);
+// 'delivered' | 'notOurs' | 'notFound' | 'alreadyHandled' | 'disabled' | 'failed'
+```
+
+- `delivered` — the link went to your `onLink` listeners (also when another link was delivered
+  earlier in this launch).
+- `notOurs` — the text is not a link of this app with a click id. Nothing was sent anywhere and
+  the text was dropped.
+- `notFound` — unknown, older than 24 hours, already used, or another app's.
+- `alreadyHandled` — a deferred link was handled on this installation before.
+- `failed` — no answer for now (the person can tap Paste again) or an unusable one.
+- `disabled` — `deferredLinks` is off, the platform is not iOS, or the store or `iosBundleId`
+  is missing.
+
+It never rejects. **Use the system paste control (`UIPasteControl`, iOS 16 or later) or a paste
+action the person starts themselves; never read the clipboard on launch.** Put the button on the
+first screen or in onboarding with a sentence that says what it does, and describe it in your App
+Review notes. What it costs: every iOS visitor without the app gets an extra page and an extra
+tap before the App Store, and it only works for the people who then actually paste — expect a
+minority.
+
+### iOS: probabilistic matching (not recommended)
+
+With `allowProbabilisticMatching: true` (in addition to `deferredLinks`, the owner's setting and
+the per-link permission) the SDK asks the server on the first launch whether exactly one recent
+tap came from the same network address, device family and language
+(`POST /v1/public/deferred-links/match` with `iosBundleId`, `deviceFamily()`, `locale()` and the
+SDK version — nothing else). Read [the costs](./ios.md#option-not-recommended-probabilistic-matching-iosdeferredmatching)
+before you switch it on:
+
+- **Apple forbids it** (fingerprinting, with or without consent). The App Review and legal risk
+  is the app owner's.
+- **A match is a guess.** On a shared network (Wi-Fi, office, carrier NAT) it can be another
+  person's link. Such a link has `isProbabilisticMatch: true`: never sign anyone in, accept an
+  invitation, apply a personal discount or show personal content on the strength of it alone.
+- It does not work with iCloud Private Relay or a VPN, or after a change of network.
+- It makes the service process IP addresses: your privacy policy and App Store privacy labels
+  must cover it, and you may need consent.
+- It must be allowed per link, and nobody knows how accurate it is.
+
+`deviceFamily` must answer `'iphone'`, `'ipad'` or `'ipod'` and `locale` the first preferred
+language (for example `'en-GB'`); anything else ends the check with `unavailable`.
+
+### Status
+
+`strybok.deferredLinkStatus` says where the check stands, and
+`strybok.onDeferredLinkStatus(listener)` reports changes. It is for development and QA; most
+installs never tapped a link, so "found nothing" is the normal result and not an error.
+
+| Status           | Meaning                                                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `disabled`       | `deferredLinks` is off, the platform is neither Android nor iOS, or the store or the app identifier was not passed  |
+| `pending`        | Not finished in this launch (not started yet, or the store or the network was not reachable); a later launch tries  |
+| `checking`       | Running now                                                                                                         |
+| `notFirstLaunch` | Finished in an earlier launch                                                                                       |
+| `unavailable`    | No source can answer. On iOS: matching is off (only a pasted link can restore anything), or family/language unknown |
+| `noReferrer`     | The store's referrer has no click id of ours — an ordinary install                                                  |
+| `notFound`       | The server refused the id: unknown, older than 24 hours, already used, or not this application's                    |
+| `superseded`     | A normal link of this app arrived first; the deferred one is dropped (one launch, one navigation)                   |
+| `delivered`      | The link was handed to `onLink`                                                                                     |
+| `failed`         | Three launches could not finish, or the server's answer was unusable                                                |
+| `awaitingPaste`  | iOS matching waits for `redeemPastedLink` or `skipPastedLink()` because `pasteboardMayContainLink` answered `true`  |
+
+In a browser (`platform: 'unknown'`) there is nothing to restore: the status is `disabled`
+whatever the options say.
 
 ## Troubleshooting
 

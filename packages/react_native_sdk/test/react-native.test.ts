@@ -20,6 +20,7 @@ import {
   type CreatedLink,
   type FetchRequestInit,
   type FetchResponseLike,
+  type LinkCampaign,
   type LinkingLike,
   type ResolvedLink,
 } from '../src/index.js';
@@ -139,6 +140,9 @@ describe('createStrybok', () => {
         appId: 'app_1',
         routePath: '/p/invite777',
         payload: { slug: 'invite777' },
+        campaign: {},
+        isDeferred: false,
+        isProbabilisticMatch: false,
       },
     ]);
     expect(api.resolves).toHaveLength(1);
@@ -199,6 +203,47 @@ describe('createStrybok', () => {
         sdkVersion: REACT_NATIVE_SDK_VERSION,
       });
     }
+  });
+
+  it('sends the campaign query, delivers the campaign and reports it with app_open', async () => {
+    const requests: { url: string; init: FetchRequestInit }[] = [];
+    const fetch = (url: string, init: FetchRequestInit): Promise<FetchResponseLike> => {
+      requests.push({ url, init });
+      if (url.endsWith('/v1/public/events')) {
+        return Promise.resolve({ status: 202, text: () => Promise.resolve('') });
+      }
+      const body = JSON.stringify({
+        linkId: 'link_1',
+        appId: 'app_1',
+        routePath: '/p/invite777',
+        ...(url.includes('utm_source') && { campaign: { source: 'instagram', medium: 'social' } }),
+      });
+      return Promise.resolve({ status: 200, text: () => Promise.resolve(body) });
+    };
+    Linking.initialUrl = `${invite}?utm_source=instagram&token=secret&utm_medium=two%20words#f`;
+    const { strybok } = create({ fetch });
+    const received: ResolvedLink[] = [];
+    strybok.onLink((link) => received.push(link));
+    await strybok.initialize();
+    Linking.open(invite);
+    await settle();
+
+    const campaigns: LinkCampaign[] = received.map((link) => link.campaign);
+    expect(campaigns).toEqual([{ source: 'instagram', medium: 'social' }, {}]);
+    expect(received[0]!.url).toBe(Linking.initialUrl);
+
+    const resolves = requests.filter((request) => request.url.includes('/v1/public/resolve'));
+    expect(resolves.map((request) => request.url)).toEqual([
+      `${apiBaseUrl}/v1/public/resolve?url=${encodeURIComponent(`${invite}?utm_source=instagram`)}`,
+      `${apiBaseUrl}/v1/public/resolve?url=${encodeURIComponent(invite)}`,
+    ]);
+    const events = requests
+      .filter((request) => request.url.endsWith('/v1/public/events'))
+      .map((request) => JSON.parse(request.init.body ?? 'null') as Record<string, unknown>);
+    expect(events).toHaveLength(2);
+    expect(events[0]!['campaign']).toEqual({ source: 'instagram', medium: 'social' });
+    expect('campaign' in events[1]!).toBe(false);
+    expect(events[1]).toMatchObject({ type: 'app_open', sdkVersion: REACT_NATIVE_SDK_VERSION });
   });
 
   it('lets tests replace the link source and the platform', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_URL_LENGTH, parseStrybokLink, parseUrl } from '../src/url.js';
+import { campaignQuery, MAX_URL_LENGTH, parseStrybokLink, parseUrl } from '../src/url.js';
 
 const host = 'my-app.strybok.link';
 const allowed = new Set([host]);
@@ -187,6 +187,53 @@ describe('parseStrybokLink', () => {
     }
   });
 
+  it('keeps only the campaign parameters of the query in the lookup URL', () => {
+    // The example of the SDK contract, verbatim.
+    expect(
+      parseStrybokLink(
+        'https://MyApp.strybok.link/invite777?utm_source=instagram&fbclid=abc&utm_medium=two%20words&utm_source=x#top',
+        new Set(['myapp.strybok.link']),
+      ),
+    ).toEqual({
+      host: 'myapp.strybok.link',
+      path: '/invite777',
+      lookupUrl: 'https://myapp.strybok.link/invite777?utm_source=instagram',
+    });
+    expect(
+      ours(`https://${host}:443/abc?token=secret&utm_campaign=spring_sale&email=a%40b.c#utm_term=x`)
+        ?.lookupUrl,
+    ).toBe(`https://${host}/abc?utm_campaign=spring_sale`);
+  });
+
+  it('a query string never changes which URLs are accepted', () => {
+    const query = '?utm_source=instagram&utm_medium=social';
+    expect(ours(`https://${host}/abc${query}`)).not.toBeNull();
+    for (const url of [
+      `http://${host}/abc`,
+      'https://evil.example.com/abc',
+      `https://${host}.evil.example.com/abc`,
+      `https://user@${host}/abc`,
+      `https://user:pw@${host}/abc`,
+      `https://${host}:8443/abc`,
+      `https://${host}:/abc`,
+      `https://${host}/abc/`,
+      `https://${host}/abc/def`,
+      `https://${host}/a.b`,
+      `https://${host}/`,
+      `https://${host}`,
+      `https://${host}/${'a'.repeat(65)}`,
+      `https://${host}\\@evil.example.com/abc`,
+    ]) {
+      expect(ours(url), url).toBeNull();
+      expect(ours(url + query), url + query).toBeNull();
+    }
+    // What looks like an authority inside the query is only text.
+    expect(ours(`https://${host}/abc?utm_source=x@evil.example.com:8443/y`)?.lookupUrl).toBe(
+      `https://${host}/abc`,
+    );
+    expect(ours(`https://evil.example.com/abc?utm_source=${host}`)).toBeNull();
+  });
+
   it('rejects everything else', () => {
     for (const url of [
       // scheme
@@ -250,5 +297,145 @@ describe('parseStrybokLink', () => {
     expect(parseStrybokLink('https://[::1]/abc', new Set(['[::1]']))?.lookupUrl).toBe(
       'https://[::1]/abc',
     );
+  });
+});
+
+describe('campaignQuery', () => {
+  it('is empty when there is no query or nothing of ours in it', () => {
+    for (const query of [
+      null,
+      '',
+      '&',
+      '&&&',
+      '=',
+      'utm_source',
+      'utm_source=',
+      'token=secret',
+      'utm=1',
+      'utm_id=42&gclid=x&fbclid=y',
+      'a=/b/c&d=%2F',
+    ]) {
+      expect(campaignQuery(query), String(query)).toBe('');
+    }
+  });
+
+  it('keeps the five keys and nothing else', () => {
+    expect(
+      campaignQuery(
+        'utm_source=instagram&utm_medium=social&utm_campaign=spring&utm_term=shoes&utm_content=banner',
+      ),
+    ).toBe(
+      'utm_source=instagram&utm_medium=social&utm_campaign=spring&utm_term=shoes&utm_content=banner',
+    );
+    expect(
+      campaignQuery('token=secret&utm_source=a&utm_id=7&utm_sourcex=b&xutm_medium=c&gclid=d'),
+    ).toBe('utm_source=a');
+  });
+
+  it('writes the kept pairs in the fixed order, whatever the order in the URL', () => {
+    expect(
+      campaignQuery('utm_content=e&x=1&utm_term=d&utm_campaign=c&utm_medium=b&y=2&utm_source=a'),
+    ).toBe('utm_source=a&utm_medium=b&utm_campaign=c&utm_term=d&utm_content=e');
+    expect(campaignQuery('utm_content=e&utm_medium=b')).toBe('utm_medium=b&utm_content=e');
+  });
+
+  it('compares key names exactly, in lower case', () => {
+    expect(
+      campaignQuery('UTM_SOURCE=a&Utm_Medium=b&utm_Campaign=c&utm-term=d&utm_content%20=e'),
+    ).toBe('');
+    expect(campaignQuery('UTM_SOURCE=a&utm_source=b')).toBe('utm_source=b');
+  });
+
+  it('takes the first occurrence of a key, even when its value is dropped', () => {
+    expect(campaignQuery('utm_source=first&utm_source=second')).toBe('utm_source=first');
+    expect(campaignQuery('utm_source=two%20words&utm_source=second')).toBe('');
+    expect(campaignQuery('utm_source=&utm_source=second')).toBe('');
+    expect(campaignQuery('utm_source&utm_source=second')).toBe('');
+    expect(campaignQuery('utm_source=%zz&utm_source=second')).toBe('');
+    expect(campaignQuery('utm_medium=a&utm_source=b&utm_medium=c&utm_source=d')).toBe(
+      'utm_source=b&utm_medium=a',
+    );
+  });
+
+  it('drops values that are empty, too long or outside the allowed characters', () => {
+    const allowedCharacters = 'AZaz09._~-';
+    expect(campaignQuery(`utm_source=${allowedCharacters}`)).toBe(
+      `utm_source=${allowedCharacters}`,
+    );
+    expect(campaignQuery(`utm_source=${'a'.repeat(64)}`)).toBe(`utm_source=${'a'.repeat(64)}`);
+    expect(campaignQuery(`utm_source=${'a'.repeat(65)}`)).toBe('');
+    for (const value of [
+      '',
+      'two%20words',
+      'two+words',
+      'a%2Bb',
+      'a@b.c',
+      'a%40b.c',
+      'a/b',
+      'a%2Fb',
+      'a%25b',
+      'a%26b',
+      'a%3Db',
+      'a=b',
+      'a,b',
+      'a:b',
+      'a!b',
+      '(other)',
+      '%22quoted%22',
+      "it's",
+      '<b>',
+      'caf%C3%A9',
+      'caf\u00e9',
+      '%D0%B2%D0%B5%D1%81%D0%BD%D0%B0',
+      'a%00b',
+      'a%0Ab',
+      '%',
+      '%4',
+      '%zz',
+      '%FF',
+      '%C3',
+    ]) {
+      expect(campaignQuery(`utm_source=${value}&utm_medium=ok`), value).toBe('utm_medium=ok');
+    }
+  });
+
+  it('percent-decodes keys and values before checking them', () => {
+    expect(campaignQuery('utm_source=%69nstagram')).toBe('utm_source=instagram');
+    expect(campaignQuery('utm%5Fsource=a')).toBe('utm_source=a');
+    expect(campaignQuery('%75tm_medium=spring%5Fsale%2D1%2E0%7E')).toBe(
+      'utm_medium=spring_sale-1.0~',
+    );
+    // A `+` is a space, in keys too, so neither side can match.
+    expect(campaignQuery('utm_source=a+b&utm+medium=c')).toBe('');
+    // An encoded separator is part of the value, not a separator.
+    expect(campaignQuery('x=1%26utm_source=a')).toBe('');
+    expect(campaignQuery('utm_source=a%26utm_medium=b')).toBe('');
+    // A key whose own escape is malformed is not one of ours and does not count as a first one.
+    expect(campaignQuery('utm_source%zz=a&utm_source=b')).toBe('utm_source=b');
+  });
+
+  it('splits each part on its first "=" only', () => {
+    expect(campaignQuery('utm_source=a=b&utm_medium=c')).toBe('utm_medium=c');
+    expect(campaignQuery('=utm_source&utm_medium=c')).toBe('utm_medium=c');
+  });
+
+  it('agrees with URLSearchParams, which the server uses', () => {
+    const keys = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'];
+    for (const query of [
+      'utm_source=instagram&fbclid=abc&utm_medium=two%20words&utm_source=x',
+      'utm_content=e&utm_term=d&utm_campaign=c&utm_medium=b&utm_source=a',
+      'utm_source=%zz&utm_source=b&utm_medium=%69',
+      'utm_source%zz=a&utm_source=b',
+      'utm%5Fsource=a&utm_medium=a+b&utm_campaign=%FF&utm_term&utm_content==',
+      '&&utm_source=a=b&=x&utm_medium=~-._',
+    ]) {
+      const params = new URLSearchParams(query);
+      const expected = keys
+        .map((key) => [key, params.get(key)] as const)
+        .filter(([, value]) => value !== null && /^[A-Za-z0-9._~-]{1,64}$/.test(value))
+        .map(([key, value]) => `${key}=${value}`)
+        .join('&');
+      expect(campaignQuery(query), query).toBe(expected);
+    }
   });
 });

@@ -13,8 +13,10 @@ JavaScript, no native module, so there is nothing to link and no Expo config plu
 > The native snippets below follow the React Native and Expo documentation; verify them against
 > the versions you use.
 >
-> Deferred deep linking is **not supported**: a link tapped before the app is installed is not
-> restored after installation.
+> Deferred links (a link tapped before the app is installed, restored after installation) are
+> **optional, off by default and not verified on a device**. This package has no native code and
+> no store integration: your app supplies the install referrer (Android), the text the person
+> pasted (iOS) and a persistent store. See [Deferred links](#deferred-links-optional).
 
 ## 1. Prerequisites
 
@@ -258,6 +260,39 @@ export async function redirectSystemPath({ path }: { path: string; initial: bool
 `resolveUrl` does not report an `app_open` event and does not call listeners. If you use this
 approach, do not also navigate from `useStrybokLink` / `onLink`.
 
+### Campaign values
+
+Every link you receive has `campaign`: an object with the optional strings `source`, `medium`,
+`campaign`, `term` and `content` (type `LinkCampaign`). It is never `null`; a value that is not
+set is absent, and the object is empty when there are none.
+
+```tsx
+useStrybokLink(strybok, (link) => {
+  analytics.track('link_opened', {
+    source: link.campaign.source, // 'instagram', or undefined
+    campaign: link.campaign.campaign,
+  });
+  openLink(link);
+});
+```
+
+- **Where the values come from.** A link can have default values, set per link in the dashboard
+  ("Campaign (optional)" in the link form). The `utm_source`, `utm_medium`, `utm_campaign`,
+  `utm_term` and `utm_content` parameters of the URL that was tapped override them one by one:
+  if the link's default source is `newsletter`,
+  `https://my-app.strybok.link/invite777?utm_source=instagram` arrives with the source
+  `instagram` and the link's other defaults. A parameter can replace a default but
+  not clear it.
+- **Which values are accepted.** 1–64 characters of letters, digits, `.`, `_`, `~` and `-`.
+  Anything else (a space, `+`, letters outside ASCII) is dropped as if the parameter were absent,
+  without an error: write `spring_sale`, not `spring sale`.
+- **They are untrusted labels.** Whoever shares a link can put any `utm_*` values on it. Use them
+  for attribution, never to grant anything or to decide what the user may see.
+- **What is sent.** Of the tapped URL's query only these five parameters are sent when resolving,
+  and the resolved values are reported with the `app_open` event (section "Analytics and
+  privacy"); every other parameter and the fragment stay on the device. In the dashboard, a link's analytics has a "Campaigns" breakdown of opens
+  by source, medium and campaign.
+
 ### API
 
 `@strybok/react-native` re-exports everything from `@strybok/js`
@@ -272,7 +307,8 @@ approach, do not also navigate from `useStrybokLink` / `onLink`.
 
 `createStrybok` takes the options of the core: `apiBaseUrl`, `allowedHosts`, `timeoutMs` (5000 per
 attempt), `maxRetries` (2; only timeouts, network errors and 5xx are retried), `retryDelayMs`,
-`dedupeWindowMs`, `reportAppOpens`, `onError`, `clientKey` (for `createLink`, section 5), plus `fetch`, `linkSource` and `platform` for
+`dedupeWindowMs`, `reportAppOpens`, `onError`, `clientKey` (for `createLink`, section 5), the
+[deferred-link options](#deferred-links-optional) (all off or empty by default), plus `fetch`, `linkSource` and `platform` for
 tests.
 
 ### Errors
@@ -352,8 +388,9 @@ other three do not go away by retrying; the app or the dashboard settings need a
 
 ## 6. Treat routes as untrusted input
 
-`routePath` and `payload` are data from the network. Match the route against routes your app
-knows before navigating (as `openLink` does above), and never execute payload contents.
+`routePath`, `payload` and `campaign` are data from the network. Match the route against routes
+your app knows before navigating (as `openLink` does above), never execute payload contents, and
+treat campaign values as labels only.
 
 ## 7. Links that arrive before sign-in
 
@@ -365,11 +402,20 @@ users: links are queued until it mounts.
 
 After a link is delivered the SDK sends one best-effort `app_open` event
 (`POST /v1/public/events`) containing a random event id, the link id, the platform
-(`ios`/`android`) and the SDK version (`0.2.0+react-native`), and no device identifiers. It never
+(`ios`/`android`), the SDK version (`0.3.0+react-native`) and the link's campaign values when it has
+any, and no device identifiers. It never
 delays navigation and all failures are ignored. Disable it with `reportAppOpens: false`.
 
-Only the link's host and slug are sent to `resolve`; query parameters and fragments stay on the
+Only the link's host and slug are sent to `resolve`, plus the five `utm_*` campaign parameters of
+the tapped URL when their value passes the character rule
+([Campaign values](#campaign-values)). Every other query parameter and the fragment stay on the
 device.
+
+With `deferredLinks` switched on, the SDK additionally sends what
+[Deferred links](#deferred-links-optional) describes: the click id from the install referrer or
+from the pasted link together with your app identifier, or — only with
+`allowProbabilisticMatching` — the bundle id, device family and language, which the server
+combines with the connection's IP address.
 
 ## 9. Testing your integration
 
@@ -408,6 +454,173 @@ xcrun simctl openurl booted "https://my-app.strybok.link/<slug>"
 adb shell am start -a android.intent.action.VIEW -c android.intent.category.BROWSABLE \
   -d "https://my-app.strybok.link/<slug>"
 ```
+
+## Deferred links (optional)
+
+A person taps a link, does not have the app, installs it and opens it: with deferred links the
+app can still receive that link. It is **off by default**, very different on Android and iOS,
+and **not verified on a device**. Start with the platform guides — what the owner switches on,
+what visitors see and what it costs:
+[Android](./android.md#links-tapped-before-the-app-is-installed-deferred-links),
+[iOS](./ios.md#links-tapped-before-the-app-is-installed). The options, results and status values
+are described once, in the [JavaScript core guide](./javascript.md#deferred-links-optional).
+
+**`@strybok/react-native` stays pure JavaScript: it ships no native module and no store
+integration of its own.** It runs the logic; your app supplies
+
+- a persistent store (`deferredLinkStore`: `getItem`/`setItem`) — React Native has none built
+  in, so pass the one your app already uses. Without it the feature stays `disabled`; the SDK
+  never keeps this state only in memory;
+- on Android: `androidPackageName` and at least one install referrer source;
+- on iOS: `iosBundleId` and the text the person pasted.
+
+```ts
+import { createStrybok, type InstallReferrerSource } from '@strybok/react-native';
+import { NativeModules } from 'react-native';
+
+// Your own native module, see below.
+const playInstallReferrer: InstallReferrerSource = () => NativeModules.InstallReferrer.get();
+
+export const strybok = createStrybok({
+  apiBaseUrl: 'https://api.strybok.com',
+  allowedHosts: ['my-app.strybok.link'],
+  deferredLinks: true, // or strybok.enableDeferredLinks() after a consent screen
+  deferredLinkStore: appStorage, // any object with getItem(key) and setItem(key, value)
+  androidPackageName: 'com.example.app',
+  installReferrerSources: [playInstallReferrer],
+  iosBundleId: 'com.example.App',
+});
+```
+
+A store shaped like AsyncStorage (`getItem`/`setItem` returning promises) can be passed as it
+is; for anything else wrap it in those two functions. A restored link arrives in `onLink` /
+`useStrybokLink` with `isDeferred: true`, never from `getInitialLink()`.
+
+### Android: obtaining the Play install referrer
+
+**Example of app-side code, not part of the SDK and not run by us.** We could not verify a
+community package for this, so the example is a native module of your own (about 40 lines).
+Add Google's library to `android/app/build.gradle`:
+
+```groovy
+dependencies {
+  implementation "com.android.installreferrer:installreferrer:2.2"
+}
+```
+
+```kotlin
+// android/app/src/main/java/.../InstallReferrerModule.kt — register it in a ReactPackage.
+class InstallReferrerModule(context: ReactApplicationContext) :
+  ReactContextBaseJavaModule(context) {
+  override fun getName() = "InstallReferrer"
+
+  @ReactMethod
+  fun get(promise: Promise) {
+    val client = InstallReferrerClient.newBuilder(reactApplicationContext).build()
+    val answered = AtomicBoolean(false)
+    fun answer(status: String, referrer: String? = null) {
+      if (!answered.compareAndSet(false, true)) return
+      try { client.endConnection() } catch (_: Exception) {}
+      promise.resolve(Arguments.createMap().apply {
+        putString("status", status)
+        if (referrer != null) putString("referrer", referrer)
+      })
+    }
+    try {
+      client.startConnection(object : InstallReferrerStateListener {
+        override fun onInstallReferrerSetupFinished(code: Int) {
+          when (code) {
+            InstallReferrerClient.InstallReferrerResponse.OK ->
+              try {
+                answer("referrer", client.installReferrer.installReferrer ?: "")
+              } catch (_: Exception) {
+                answer("unavailableForNow") // RemoteException
+              }
+            InstallReferrerClient.InstallReferrerResponse.FEATURE_NOT_SUPPORTED,
+            InstallReferrerClient.InstallReferrerResponse.DEVELOPER_ERROR ->
+              answer("unavailable")
+            else -> answer("unavailableForNow") // SERVICE_UNAVAILABLE, SERVICE_DISCONNECTED
+          }
+        }
+        override fun onInstallReferrerServiceDisconnected() = answer("unavailableForNow")
+      })
+    } catch (_: Exception) {
+      answer("unavailableForNow")
+    }
+  }
+}
+```
+
+With Expo this needs a development build and a config plugin or a local Expo module that adds
+the same code; it cannot work in Expo Go.
+
+The SDK reads only `strybok_click` from the string and sends only that id, your package name and
+the SDK version. A source that rejects or takes longer than 10 seconds counts as "unavailable
+for now"; the check is repeated on a later launch, at most three times per installation.
+Sources for Huawei AppGallery and Samsung Galaxy Store can be added to the list in the same
+way, but those flows are **unverified even in the native Strybok SDKs**.
+
+### iOS: the paste step
+
+Nothing is restored automatically on iOS. With the owner's "copy and paste the link" option
+switched on, the visitor copies the link on a page before the App Store; your app shows a paste
+button on its first screen or in onboarding and passes the text on:
+
+```tsx
+const result = await strybok.redeemPastedLink(pastedText);
+if (result === 'notOurs') showHint('That is not a link to this app.');
+// 'delivered': the link arrives in onLink / useStrybokLink.
+```
+
+How to obtain `pastedText` is your app's choice; the SDK never reads the clipboard:
+
+- **Recommended: Apple's paste control** (`UIPasteControl`, iOS 16 or later). Tapping it is the
+  person's consent and no "Allow Paste" alert appears. React Native has no built-in component
+  for it, so this is a small native view of your own that sends the pasted string to JavaScript.
+- A "Paste" button of your own that reads the clipboard through whatever clipboard module your
+  app uses. iOS then shows its "Allow Paste" prompt.
+
+Never read the clipboard at launch. Say next to the button what it does, and describe it in
+your App Review notes. The cost of this option: every iOS visitor without the app sees an extra
+page and makes an extra tap before the App Store, and only the people who then paste get their
+link.
+
+### iOS: probabilistic matching (not recommended)
+
+`allowProbabilisticMatching: true` lets the server guess the link from the network address on
+the first launch. It additionally needs two callbacks, because this package has no native code:
+
+```ts
+createStrybok({
+  // ...
+  deferredLinks: true,
+  allowProbabilisticMatching: true,
+  // 'iphone' | 'ipad' | 'ipod'. `Platform.isPad` is React Native's; an iPod touch cannot be
+  // told apart without native code and is simply not matched.
+  deviceFamily: () => (Platform.OS === 'ios' && Platform.isPad ? 'ipad' : 'iphone'),
+  // The person's first preferred language as a BCP 47 tag ("en-GB"), from your localisation
+  // library or a native module (`Locale.preferredLanguages.first`).
+  locale: () => preferredLanguage,
+});
+```
+
+State plainly to whoever decides this:
+
+- **Apple's rules forbid it** (App Store Review Guidelines and the Developer Program License
+  Agreement: no deriving data from a device to identify it, with or without consent). The App
+  Review and legal risk is the app owner's.
+- **Wrong matches happen** on shared networks: the link may be another person's. Such a link
+  has `isProbabilisticMatch: true` — never sign in, accept an invitation, apply a personal
+  discount or show personal content because of it.
+- It does not work with iCloud Private Relay or a VPN.
+- The service processes IP addresses for it: privacy policy and App Store privacy labels must
+  say so, and consent may be needed.
+- It needs the owner's setting and a per-link opt-in, and its accuracy is unknown.
+
+Details and the full list of costs: [iOS guide](./ios.md#option-not-recommended-probabilistic-matching-iosdeferredmatching).
+
+`strybok.deferredLinkStatus` (and `onDeferredLinkStatus`) tells you during development what the
+check did; see the [status table](./javascript.md#status).
 
 ## Troubleshooting
 

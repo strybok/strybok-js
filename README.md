@@ -12,7 +12,10 @@ and payload, each delivered exactly once.
 | [`@strybok/capacitor`](./packages/capacitor_sdk) | Capacitor and Ionic | [capacitor.md](./docs/capacitor.md) |
 
 All SDKs follow the same [contract](./docs/sdk-contract.md). Not verified on physical
-devices. Deferred deep linking is not supported.
+devices. Deferred links (restoring a link tapped before the app was installed) are optional
+and off by default from 0.3.0; these packages have no native code, so the app supplies the
+store's install referrer on Android and the pasted link on iOS, where nothing is automatic.
+None of it has run on a device.
 
 ## Install
 

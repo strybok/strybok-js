@@ -180,6 +180,9 @@ describe('responses', () => {
       appId: 'a',
       routePath: '/x',
       payload: { a: { b: [1, 2] }, c: null },
+      campaign: {},
+      isDeferred: false,
+      isProbabilisticMatch: false,
     });
   });
 

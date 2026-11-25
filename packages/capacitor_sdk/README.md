@@ -25,6 +25,11 @@ On iOS and Android, requests are sent with Capacitor's native HTTP (`CapacitorHt
 the WebView's `fetch`, because the Strybok API does not allow cross-origin calls from WebView
 origins.
 
+Every delivered link also has `campaign`: the link's campaign values with the `utm_*` parameters
+of the tapped URL on top, as the optional strings `source`, `medium`, `campaign`, `term` and
+`content` (an empty object when there are none). They are labels chosen by whoever shared the
+link, so use them for attribution only, for example `link.campaign.source`.
+
 It can also create links to share. Pass the application's publishable `clientKey` to
 `createStrybok` (enable "Links from the app" in the dashboard and list the allowed route patterns
 there):
@@ -47,7 +52,29 @@ Full guide, native setup and troubleshooting:
 
 - **Early release (0.x)**: covered by unit tests with fake plugins only. It has not been run
   inside a real Capacitor app, nor on a physical device.
-- Deferred deep linking is not supported.
+- Deferred links (restoring a link tapped before the app was installed) are optional, off by
+  default and unverified on devices; see below.
+
+## Deferred links (optional)
+
+Off unless you pass `deferredLinks: true` (or call `enableDeferredLinks()` later, for example
+after a consent screen). This package ships **no native code and no store integration of its
+own**; the app supplies:
+
+- `deferredLinkStore` — persistent storage with `getItem`/`setItem` (`@capacitor/app` and `@capacitor/core` have none, and this package does not add the Preferences plugin). Required: without it
+  the status stays `disabled`.
+- Android: `androidPackageName` and `installReferrerSources` — functions of yours that return the
+  Play install referrer from a few lines of native code (example in the guide).
+- iOS: `iosBundleId`, and the text the person pasted with your paste button, handed to
+  `redeemPastedLink(text)`. The SDK never reads the clipboard.
+- iOS probabilistic matching (`allowProbabilisticMatching`, with `deviceFamily` and `locale`
+  callbacks) is forbidden by Apple's rules and can deliver another person's link; it is off by
+  default and not recommended.
+
+A restored link arrives through `onLink` with `isDeferred: true` (and `isProbabilisticMatch:
+true` when it was guessed — never open anything personal on the strength of such a link).
+Guide with the app-side code, costs and limits:
+[`docs/capacitor.md`](../../docs/capacitor.md#deferred-links-optional).
 
 ## Install
 

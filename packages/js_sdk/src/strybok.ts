@@ -11,16 +11,21 @@ import {
   UnsupportedLinkError,
   type StrybokValidationIssue,
 } from './errors.js';
+import { DeferredLinks, type HttpResult } from './deferred.js';
+import { isRecord, parseJson, parseLinkFields } from './link-response.js';
 import { runtime, sleep, type AbortControllerLike } from './runtime.js';
 import type {
   CreatedLink,
   CreateLinkOptions,
+  DeferredLinkStatus,
+  DeferredLinkStatusListener,
   FetchLike,
   FetchRequestInit,
   FetchResponseLike,
   LinkErrorHandler,
   LinkListener,
   LinkSource,
+  PastedLinkResult,
   ResolvedLink,
   StrybokOptions,
   StrybokPlatform,
@@ -46,13 +51,6 @@ interface Reception {
   link: ResolvedLink | null;
   /** Settles when the URL has been resolved and delivered, or has failed. Never rejects. */
   done: Promise<void>;
-}
-
-interface HttpResult {
-  readonly status: number;
-  readonly body: string;
-  /** The `Retry-After` response header, when the transport exposes headers and it was sent. */
-  readonly retryAfter: string | null;
 }
 
 /**
@@ -98,6 +96,9 @@ export class Strybok {
   private initialLink: ResolvedLink | null = null;
   private last: Reception | null = null;
   private disposed = false;
+  /** Whether a link of this app arrived from the link source since the process started. */
+  private normalLinkAccepted = false;
+  private readonly deferred: DeferredLinks;
 
   constructor(options: StrybokOptions) {
     if (options === null || typeof options !== 'object') {
@@ -172,6 +173,76 @@ export class Strybok {
     }
     this.onError = options.onError;
     this.now = options.now ?? Date.now;
+
+    this.deferred = new DeferredLinks(
+      {
+        apiBaseUrl: this.apiBaseUrl,
+        allowedHosts: this.allowedHosts,
+        platform: this.platform,
+        sdkVersion: this.sdkVersion,
+        maxRetries: this.maxRetries,
+        retryDelayMs: this.retryDelayMs,
+        send: (url, init) => this.send(url, init, true),
+        isDisposed: () => this.disposed,
+        normalLinkAccepted: () => this.normalLinkAccepted,
+        deliver: (link) => this.deliver(link),
+      },
+      options,
+    );
+  }
+
+  /**
+   * Where the deferred-link check stands (see {@link DeferredLinkStatus}). `'disabled'` unless
+   * deferred links are switched on and everything they need was passed in the options.
+   */
+  get deferredLinkStatus(): DeferredLinkStatus {
+    return this.deferred.status;
+  }
+
+  /**
+   * Calls `listener` whenever {@link deferredLinkStatus} changes and returns a function that
+   * removes it. Meant for development and QA: most installs never tapped a link, so a check that
+   * finds nothing is the normal case and nothing here is an error.
+   */
+  onDeferredLinkStatus(listener: DeferredLinkStatusListener): Unsubscribe {
+    if (typeof listener !== 'function') throw new TypeError('Strybok: listener must be a function');
+    if (this.disposed) return () => {};
+    return this.deferred.subscribe(listener);
+  }
+
+  /**
+   * Switches deferred links on after the SDK was created, for example after a consent screen,
+   * and runs the check once if {@link initialize} has already completed. Does the same as the
+   * `deferredLinks` option; calling it again, or with the option already on, changes nothing.
+   */
+  enableDeferredLinks(): void {
+    if (this.disposed) return;
+    this.deferred.enable();
+  }
+
+  /**
+   * iOS only: hands over the text the person pasted (from a paste button of the app) after
+   * copying the link on the page shown before the App Store. The SDK never reads the clipboard
+   * itself. If the text is a link of this app carrying a click id, the id is exchanged for the
+   * link, which is then delivered to {@link onLink} listeners like any other, with `isDeferred`
+   * set.
+   *
+   * Never rejects. Resolves with `'delivered'`, `'notOurs'` (nothing was sent and the text was
+   * dropped), `'notFound'` (unknown, older than 24 hours, already used), `'alreadyHandled'`
+   * (a deferred link was handled before), `'disabled'` or `'failed'` (the person can try again
+   * unless the server's answer was unusable).
+   */
+  redeemPastedLink(text: string): Promise<PastedLinkResult> {
+    return this.deferred.redeemPastedLink(text);
+  }
+
+  /**
+   * iOS probabilistic matching only: tells the SDK that the person moved on without pasting, so
+   * the check that waits in status `'awaitingPaste'` continues. Does nothing otherwise.
+   */
+  skipPastedLink(): void {
+    if (this.disposed) return;
+    this.deferred.skipPastedLink();
   }
 
   /**
@@ -224,7 +295,7 @@ export class Strybok {
 
   /**
    * Whether `url` is a Strybok link of this app: `https`, a host from `allowedHosts`, default
-   * port, no credentials and a path of exactly one slug. Query and fragment are ignored.
+   * port, no credentials and a path of exactly one slug. Query and fragment do not matter.
    */
   isStrybokUrl(url: string): boolean {
     return parseStrybokLink(url, this.allowedHosts) !== null;
@@ -247,7 +318,8 @@ export class Strybok {
         typeof url === 'string' ? url : undefined,
       );
     }
-    // Query and fragment are not needed for the lookup and may hold private data.
+    // Of the query only the campaign parameters are sent; the rest and the fragment are not
+    // needed for the lookup and may hold private data.
     const endpoint = `${this.apiBaseUrl}/v1/public/resolve?url=${encodeURIComponent(parts.lookupUrl)}`;
 
     let lastError: StrybokError | null = null;
@@ -397,6 +469,7 @@ export class Strybok {
     this.initialLink = null;
     this.last = null;
     this.listeners.clear();
+    this.deferred.dispose();
     const unsubscribe = this.unsubscribeSource;
     this.unsubscribeSource = null;
     try {
@@ -424,11 +497,15 @@ export class Strybok {
       // The platform could not tell us; treat as "no launch link".
     }
     await this.handle(initial, true);
+    // Only now, and never awaited: the deferred-link check must not delay anything above.
+    this.deferred.started();
   }
 
   /** Never rejects. */
   private handle(url: unknown, isInitial: boolean): Promise<void> {
     if (this.disposed || typeof url !== 'string' || !this.isStrybokUrl(url)) return DONE;
+    // From here on a deferred link is dropped: one launch, one navigation.
+    this.normalLinkAccepted = true;
 
     // The OS (or the host framework) can hand over the same tap twice, e.g. as the launch URL
     // and again through the subscription.
@@ -461,13 +538,22 @@ export class Strybok {
     if (this.disposed) return;
     reception.link = link;
     if (reception.initial) this.initialLink = link;
+    this.deliver(link);
+    if (this.reportAppOpens) void this.reportAppOpen(link);
+  }
+
+  /**
+   * Hands a link to the listeners, or queues it until one attaches. Deferred links enter here
+   * too: they are never the launch link and no `app_open` is sent for them.
+   */
+  private deliver(link: ResolvedLink): void {
+    if (this.disposed) return;
     if (this.listeners.size > 0 && this.pending.length === 0) {
       this.emit(link);
     } else {
       this.pending.push(link); // Behind anything still queued, to keep the order.
       this.scheduleDrain();
     }
-    if (this.reportAppOpens) void this.reportAppOpen(link);
   }
 
   /**
@@ -557,6 +643,8 @@ export class Strybok {
             type: 'app_open',
             platform: this.platform,
             sdkVersion: this.sdkVersion,
+            // What resolve returned, never read from the URL here; left out when empty.
+            ...(Object.keys(link.campaign).length > 0 && { campaign: link.campaign }),
           }),
         },
         false,
@@ -575,25 +663,9 @@ export class Strybok {
 const TIMED_OUT = { timedOut: true } as const;
 
 function parseResolveResponse(url: string, body: string): ResolvedLink {
-  let json: unknown;
-  try {
-    json = JSON.parse(body);
-  } catch {
-    json = null;
-  }
-  if (isRecord(json)) {
-    const { linkId, appId, routePath, payload } = json;
-    if (
-      typeof linkId === 'string' &&
-      typeof appId === 'string' &&
-      typeof routePath === 'string' &&
-      routePath.startsWith('/') &&
-      !routePath.startsWith('//')
-    ) {
-      return { url, linkId, appId, routePath, payload: isRecord(payload) ? payload : {} };
-    }
-  }
-  throw new StrybokServerError('Malformed resolve response', 200, url);
+  const fields = parseLinkFields(parseJson(body));
+  if (fields === null) throw new StrybokServerError('Malformed resolve response', 200, url);
+  return { url, ...fields, isDeferred: false, isProbabilisticMatch: false };
 }
 
 function parseCreateLinkResponse(status: number, body: string): CreatedLink {
@@ -661,14 +733,6 @@ function readHeader(response: FetchResponseLike, name: string): string | null {
   }
 }
 
-function parseJson(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
 /** Whether `value` is sent as a JSON object: an object whose JSON form is one, too. */
 function isJsonObject(value: unknown): boolean {
   if (!isRecord(value)) return false;
@@ -678,10 +742,6 @@ function isJsonObject(value: unknown): boolean {
   } catch {
     return false; // Circular, or holds a BigInt.
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function duration(name: string, value: number | undefined, fallback: number): number {

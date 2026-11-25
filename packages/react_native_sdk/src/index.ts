@@ -4,8 +4,11 @@
  * A thin adapter over `@strybok/js`: links come from React Native's `Linking` module, the
  * platform from `Platform.OS`. Pure JavaScript, no native module.
  *
- * Deferred deep linking (restoring a link after the app is installed from a store) is not
- * supported.
+ * Deferred links (restoring a link after the app is installed from a store) are optional and off
+ * by default (`deferredLinks`). This package has no native code and no store integration: the
+ * app supplies the install referrer (`installReferrerSources`), the pasted text on iOS
+ * (`redeemPastedLink`) and a persistent store (`deferredLinkStore`); without the store the
+ * feature stays disabled.
  */
 import { useEffect, useRef } from 'react';
 import { Linking, Platform } from 'react-native';

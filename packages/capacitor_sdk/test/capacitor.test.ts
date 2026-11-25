@@ -23,6 +23,7 @@ import {
   type CreatedLink,
   type FetchRequestInit,
   type FetchResponseLike,
+  type LinkCampaign,
   type ResolvedLink,
 } from '../src/index.js';
 import { createStrybokWith } from '../src/factory.js';
@@ -281,6 +282,9 @@ describe('createStrybok', () => {
         appId: 'app_1',
         routePath: '/p/invite777',
         payload: { slug: 'invite777' },
+        campaign: {},
+        isDeferred: false,
+        isProbabilisticMatch: false,
       },
     ]);
     expect(resolveRequests()).toHaveLength(1);
@@ -358,6 +362,57 @@ describe('createStrybok', () => {
         sdkVersion: CAPACITOR_SDK_VERSION,
       });
     }
+  });
+
+  it('sends the campaign query, delivers the campaign and reports it with app_open', async () => {
+    // Like the native plugin: the answer arrives already parsed.
+    state.respond = (request) => {
+      if (request.url.endsWith('/v1/public/events')) return { status: 202, data: '' };
+      return {
+        status: 200,
+        data: {
+          linkId: 'link_1',
+          appId: 'app_1',
+          routePath: '/p/invite777',
+          ...(request.url.includes('utm_source') && {
+            campaign: { source: 'instagram', medium: 'social' },
+          }),
+        },
+      };
+    };
+    App.launchUrl = `${invite}?utm_source=instagram&token=secret&utm_medium=two%20words#f`;
+    const strybok = create();
+    const received: ResolvedLink[] = [];
+    strybok.onLink((link) => received.push(link));
+    await strybok.initialize();
+    App.open(invite);
+    await settle();
+
+    const campaigns: LinkCampaign[] = received.map((link) => link.campaign);
+    expect(campaigns).toEqual([{ source: 'instagram', medium: 'social' }, {}]);
+    expect(received[0]!.url).toBe(App.launchUrl);
+
+    expect(resolveRequests().map((request) => request.url)).toEqual([
+      `${apiBaseUrl}/v1/public/resolve?url=${encodeURIComponent(`${invite}?utm_source=instagram`)}`,
+      `${apiBaseUrl}/v1/public/resolve?url=${encodeURIComponent(invite)}`,
+    ]);
+    expect(eventRequests().map((request) => request.data)).toEqual([
+      {
+        eventId: expect.stringMatching(/^[0-9a-f-]{36}$/) as unknown,
+        linkId: 'link_1',
+        type: 'app_open',
+        platform: 'ios',
+        sdkVersion: CAPACITOR_SDK_VERSION,
+        campaign: { source: 'instagram', medium: 'social' },
+      },
+      {
+        eventId: expect.stringMatching(/^[0-9a-f-]{36}$/) as unknown,
+        linkId: 'link_1',
+        type: 'app_open',
+        platform: 'ios',
+        sdkVersion: CAPACITOR_SDK_VERSION,
+      },
+    ]);
   });
 
   it('maps HTTP statuses and plugin failures to the typed errors', async () => {
