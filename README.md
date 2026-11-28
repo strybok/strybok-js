@@ -15,7 +15,8 @@ All SDKs follow the same [contract](./docs/sdk-contract.md). Not verified on phy
 devices. Deferred links (restoring a link tapped before the app was installed) are optional
 and off by default from 0.3.0; these packages have no native code, so the app supplies the
 store's install referrer on Android and the pasted link on iOS, where nothing is automatic.
-None of it has run on a device.
+Links without an API call (path links and Firebase long links) are optional and off by
+default from 0.4.0 (`parameterLinks`). None of it has run on a device.
 
 ## Install
 

@@ -22,6 +22,10 @@ its whole API.
 > **optional, off by default and not verified on a device**. This package has no native code, so
 > your app supplies the store's install referrer (Android) or the text the person pasted (iOS):
 > see [Deferred links](#deferred-links-optional).
+>
+> Links without an API call (path links and Firebase long links, new in 0.4.0) are **optional,
+> off by default and not verified on a device**: see
+> [Links without an API call](#links-without-an-api-call-optional).
 
 ## 1. Prerequisites
 
@@ -34,13 +38,13 @@ its whole API.
 ## 2. Add the package
 
 ```sh
-npm install @strybok/js
+npm install @strybok/js@^0.4.0
 ```
 
-The package is ESM only, has no dependencies and needs these from the runtime: `Promise`,
-`setTimeout`, `JSON`, `encodeURIComponent`, and either a global `fetch` or the `fetch` option.
-`AbortController` and `crypto.getRandomValues` are used when they exist. It does not use the
-`URL` class.
+This guide describes 0.4.0. The package is ESM only, has no dependencies and needs these from
+the runtime: `Promise`, `setTimeout`, `JSON`, `encodeURIComponent`, and either a global `fetch`
+or the `fetch` option. `AbortController` and `crypto.getRandomValues` are used when they exist.
+It does not use the `URL` class.
 
 ## 3. Use it
 
@@ -140,21 +144,22 @@ Details worth knowing:
 
 ### Options
 
-| Option           | Default     | Meaning                                                                                                                    |
-| ---------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `apiBaseUrl`     | required    | Base URL of the API, e.g. `https://api.strybok.com`. A path prefix is preserved.                                           |
-| `allowedHosts`   | required    | Bare hostnames of this app's links (no scheme, no path). Compared lower-case.                                              |
-| `linkSource`     | required    | Where URLs come from (section 4).                                                                                          |
-| `platform`       | `'unknown'` | Reported with `app_open` events: `'ios'`, `'android'` or `'unknown'`.                                                      |
-| `fetch`          | global      | HTTP transport (section 5).                                                                                                |
-| `timeoutMs`      | `5000`      | Time allowed for one resolve attempt, including reading the body.                                                          |
-| `maxRetries`     | `2`         | Extra attempts after a timeout, network error or 5xx. 4xx is never retried.                                                |
-| `retryDelayMs`   | `400`       | Pause before the first retry; doubles for each further retry.                                                              |
-| `dedupeWindowMs` | `2000`      | The identical URL received again within this window is dropped.                                                            |
-| `reportAppOpens` | `true`      | Send a best-effort `app_open` event after a link was resolved.                                                             |
-| `onError`        | none        | Receives errors for our links that could not be resolved.                                                                  |
-| `clientKey`      | none        | Publishable client key `pk_…` of the application. Only needed for `createLink`.                                            |
-| `deferredLinks`  | `false`     | Restore a link tapped before installation; see [Deferred links](#deferred-links-optional) for the options that go with it. |
+| Option           | Default     | Meaning                                                                                                                                                            |
+| ---------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `apiBaseUrl`     | required    | Base URL of the API, e.g. `https://api.strybok.com`. A path prefix is preserved.                                                                                   |
+| `allowedHosts`   | required    | Bare hostnames of this app's links (no scheme, no path): the managed hostname and an active [custom domain](./ios.md#custom-domain-optional). Compared lower-case. |
+| `linkSource`     | required    | Where URLs come from (section 4).                                                                                                                                  |
+| `platform`       | `'unknown'` | Reported with `app_open` events: `'ios'`, `'android'` or `'unknown'`.                                                                                              |
+| `fetch`          | global      | HTTP transport (section 5).                                                                                                                                        |
+| `timeoutMs`      | `5000`      | Time allowed for one resolve attempt, including reading the body.                                                                                                  |
+| `maxRetries`     | `2`         | Extra attempts after a timeout, network error or 5xx. 4xx is never retried.                                                                                        |
+| `retryDelayMs`   | `400`       | Pause before the first retry; doubles for each further retry.                                                                                                      |
+| `dedupeWindowMs` | `2000`      | The identical URL received again within this window is dropped.                                                                                                    |
+| `reportAppOpens` | `true`      | Send a best-effort `app_open` event after a link was resolved.                                                                                                     |
+| `onError`        | none        | Receives errors for our links that could not be resolved.                                                                                                          |
+| `clientKey`      | none        | Publishable client key `pk_…` of the application. Only needed for `createLink`.                                                                                    |
+| `parameterLinks` | none        | `{ payloadKeys: [...] }`: also accept path links and Firebase long links; see [Links without an API call](#links-without-an-api-call-optional).                    |
+| `deferredLinks`  | `false`     | Restore a link tapped before installation; see [Deferred links](#deferred-links-optional) for the options that go with it.                                         |
 
 These are the options of the [SDK contract](./sdk-contract.md); durations carry an `Ms` suffix
 because they are plain numbers in JavaScript. Invalid options make the constructor throw
@@ -166,7 +171,9 @@ Exactly the contract's rules: `https`, host in `allowedHosts`, no `user:pass@`, 
 443, and a path of one slug (`^/[A-Za-z0-9_-]{1,64}$`, no trailing slash). Query and fragment are
 allowed and do not decide whether a URL is accepted. Of the query only the five `utm_*` campaign
 parameters are sent to the API ([Campaign values](#campaign-values)); the rest of it and the
-fragment are **never sent**.
+fragment are **never sent**. With the `parameterLinks` option route paths and Firebase long links
+are accepted too, and the configured payload keys are sent with them:
+[Links without an API call](#links-without-an-api-call-optional).
 
 The check uses a small strict parser of its own instead of the runtime's `URL` class, which is
 incomplete in some runtimes. It does not normalise anything and rejects what a lenient parser
@@ -415,6 +422,12 @@ the tapped URL when their value passes the character rule
 ([Campaign values](#campaign-values)). Every other query parameter and the fragment stay on the
 device.
 
+With `parameterLinks` set, the SDK also sends the path of a path link and the values of the
+payload keys you configured, or for a Firebase long link the deep link's scheme, host and path,
+its values of those keys and the `apn` and `ibi` parameters
+([Links without an API call](#links-without-an-api-call-optional)). Do not configure keys that
+carry personal data.
+
 With `deferredLinks` switched on, the SDK additionally sends what
 [Deferred links](#deferred-links-optional) describes: the click id from the install referrer or
 from the pasted link with your app identifier, or — only with `allowProbabilisticMatching` — the
@@ -453,6 +466,55 @@ source.emit('https://my-app.strybok.link/other'); // link while running
 `new FakeLinkSource({ initialUrl, replayInitialUrlOnSubscribe: true })` mimics platforms that
 report the launch URL twice. The `now` option of `Strybok` replaces the clock used for
 de-duplication.
+
+## Links without an API call (optional)
+
+The owner can let any address of the app's link hosts open a route without creating a link
+first (dashboard: Setup → Links without an API call): **path links** such as
+`https://my-app.strybok.link/product/42?id=7`, and **Firebase long links**
+`https://my-app.strybok.link/?link=https://example.com/product/42&apn=…`. Without the SDK option
+the SDK ignores a path of several segments and a long link (nothing is delivered, no request is
+made) and resolves a one-segment path without its payload, as 0.3.0 did.
+
+To receive them, pass `parameterLinks` (new in 0.4.0). Copy its value from `parameterLinks` of
+the application's integration guide (`GET /v1/apps/:appId/integration`, also shown on the
+dashboard's setup screen); it is `null` while both kinds are off, and then you leave the option
+out:
+
+```ts
+const strybok = new Strybok({
+  apiBaseUrl: 'https://api.strybok.com',
+  allowedHosts: ['my-app.strybok.link'],
+  linkSource,
+  parameterLinks: { payloadKeys: ['id', 'lang'] }, // parameterLinks of the integration guide
+});
+
+strybok.onLink((link) => {
+  // https://my-app.strybok.link/product/42?id=7&lang=uk → '/product/42', { id: '7', lang: 'uk' }
+  openRoute(link.routePath, link.payload);
+});
+```
+
+- **The server decides.** Whether a kind is on, which routes are allowed and what the payload is
+  (strings only). The delivered link has the `routePath` and `payload` of the answer, never the
+  tapped path, and is as untrusted as any link. `app_open` carries the answer's `linkId`.
+- **What is sent.** The path as received and, of the query, only the configured keys (first
+  occurrence, 1–256 characters, no control characters) and the `utm_*` values; for a long link
+  the deep link rebuilt from its scheme, host, path and payload keys, plus `apn` and `ibi`. Never
+  the fragment or any other parameter (`afl`, `ifl`, `ofl`, `st`, `sd`, `si`, `isi`, ...).
+- **What is accepted** besides one slug: a route path (at most 512 characters, no `//`, no `.` or
+  `..` segment, not `/.well-known/…`, `/favicon.ico` and the like) and a long link at `/` whose
+  `link` is an `http(s)` URL without user info or port. An address that passes but is no link
+  answers 404: `onError` gets `LinkNotFoundError`, as for an unknown slug.
+- **The keys are compiled into the app.** When the owner changes them, installed builds keep
+  sending the keys they know until your next release. Invalid keys (more than 20, one twice, not
+  1–40 characters of `A–Z a–z 0–9 _ . -`, `utm_…`, `st`, `sd`, `si`, `strybok_click`) make the
+  constructor throw.
+- **Deferred links** are unchanged: they restore only links you created, with one slug.
+
+The exact rules, with the shared test vectors every SDK runs:
+[SDK contract](./sdk-contract.md#links-without-an-api-call). Unit-tested only; not verified on a
+device.
 
 ## Deferred links (optional)
 
@@ -623,6 +685,7 @@ whatever the options say.
 | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | Link opens the browser/store instead of the app | Native association is not verified: see the [Android](./android.md) and [iOS](./ios.md) guides. The SDK is not involved at this point.       |
 | App opens but nothing happens                   | Does your `LinkSource` receive the URL at all? Host missing from `allowedHosts`? What does `onError` report? Is the API reachable?           |
+| A path link or long link is ignored             | `parameterLinks` is not set (or the SDK is older than 0.4.0): see [Links without an API call](#links-without-an-api-call-optional).          |
 | `StrybokNetworkError` only inside a WebView     | CORS: see section 5.                                                                                                                         |
 | The constructor throws about `fetch`            | The runtime has no global `fetch`; pass the `fetch` option.                                                                                  |
 | Screen opens twice                              | Two `Strybok` instances, or your framework's own deep-link handling also reacts to the URL.                                                  |

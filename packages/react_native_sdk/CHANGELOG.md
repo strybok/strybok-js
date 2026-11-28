@@ -1,3 +1,13 @@
+## 0.4.0
+
+- Links without an API call from `@strybok/js` 0.4.0, optional and off by default: pass
+  `parameterLinks: { payloadKeys: [...] }` (the value of `parameterLinks` in the application's
+  integration guide) to `createStrybok`, and path links (`https://<host>/product/42?id=7`) and
+  Firebase long links (`https://<host>/?link=…`) are delivered with the route and payload the
+  server read. Of the query only the configured keys and the `utm_*` values are sent; an invalid
+  option makes `createStrybok` throw. Without the option nothing changes. Unit-tested only; never
+  run on a device.
+
 ## 0.3.0
 
 - Campaign values from `@strybok/js` 0.3.0: a resolved link has `campaign` (`LinkCampaign`, the

@@ -25,7 +25,8 @@ export abstract class StrybokError extends Error {
 
 /**
  * The URL is not a Strybok link of this app: wrong scheme, a host outside `allowedHosts`, or a
- * path that is not a single slug.
+ * path that is not a single slug (with `parameterLinks`: neither a slug, nor a route path, nor a
+ * Firebase long link).
  */
 export class UnsupportedLinkError extends StrybokError {
   readonly kind = 'unsupported_link';

@@ -17,24 +17,29 @@ JavaScript, no native module, so there is nothing to link and no Expo config plu
 > **optional, off by default and not verified on a device**. This package has no native code and
 > no store integration: your app supplies the install referrer (Android), the text the person
 > pasted (iOS) and a persistent store. See [Deferred links](#deferred-links-optional).
+>
+> Links without an API call (path links and Firebase long links, new in 0.4.0) are **optional,
+> off by default and not verified on a device**: see
+> [Links without an API call](#links-without-an-api-call-optional).
 
 ## 1. Prerequisites
 
 1. Create an application in Strybok with your iOS and Android identifiers.
 2. Read its setup data: `GET /v1/apps/:appId/integration` returns the managed hostname (for
    example `my-app.strybok.link`) and ready-to-copy snippets.
+   If the application has an active [custom domain](./ios.md#custom-domain-optional), the same answer lists it in `allowedHosts`: declare it in the entitlement and the intent filter next to the managed hostname and pass both to `allowedHosts`.
 3. Complete the native setup below (step 3). Without it the OS never delivers links to the app,
    and the SDK has nothing to receive.
 
 ## 2. Add the package
 
 ```sh
-npm install @strybok/react-native
+npm install @strybok/react-native@^0.4.0
 ```
 
-Peer dependencies: `react` and `react-native` 0.65 or newer (the SDK also falls back to the older
-`Linking.removeEventListener`). The packages are ESM with an `exports` map; Metro resolves the
-main entry through `main` in any case.
+This guide describes 0.4.0. Peer dependencies: `react` and `react-native` 0.65 or newer (the
+SDK also falls back to the older `Linking.removeEventListener`). The packages are ESM with an
+`exports` map; Metro resolves the main entry through `main` in any case.
 
 ## 3. Native setup
 
@@ -307,8 +312,9 @@ useStrybokLink(strybok, (link) => {
 
 `createStrybok` takes the options of the core: `apiBaseUrl`, `allowedHosts`, `timeoutMs` (5000 per
 attempt), `maxRetries` (2; only timeouts, network errors and 5xx are retried), `retryDelayMs`,
-`dedupeWindowMs`, `reportAppOpens`, `onError`, `clientKey` (for `createLink`, section 5), the
-[deferred-link options](#deferred-links-optional) (all off or empty by default), plus `fetch`, `linkSource` and `platform` for
+`dedupeWindowMs`, `reportAppOpens`, `onError`, `clientKey` (for `createLink`, section 5),
+`parameterLinks` ([links without an API call](#links-without-an-api-call-optional), not set by
+default), the [deferred-link options](#deferred-links-optional) (all off or empty by default), plus `fetch`, `linkSource` and `platform` for
 tests.
 
 ### Errors
@@ -316,12 +322,12 @@ tests.
 `resolveUrl` rejects with, and `onError` receives, a `StrybokError` (for `createLink` see
 section 5):
 
-| Type                                          | Meaning                                                                                                                                              |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `UnsupportedLinkError`                        | Not `https`, host not in `allowedHosts`, or not a single-slug path. Thrown before any network call. Ignored silently for links arriving from the OS. |
-| `LinkNotFoundError`                           | Unknown, disabled or expired link.                                                                                                                   |
-| `StrybokTimeoutError` / `StrybokNetworkError` | No answer after all retries (e.g. offline). The app keeps working; the link is simply not opened.                                                    |
-| `StrybokServerError`                          | Unexpected status or malformed response (`statusCode`).                                                                                              |
+| Type                                          | Meaning                                                                                                                                                                                                            |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `UnsupportedLinkError`                        | Not `https`, host not in `allowedHosts`, or not a single-slug path (with `parameterLinks`: neither a route path nor a long link). Thrown before any network call. Ignored silently for links arriving from the OS. |
+| `LinkNotFoundError`                           | Unknown, disabled or expired link.                                                                                                                                                                                 |
+| `StrybokTimeoutError` / `StrybokNetworkError` | No answer after all retries (e.g. offline). The app keeps working; the link is simply not opened.                                                                                                                  |
+| `StrybokServerError`                          | Unexpected status or malformed response (`statusCode`).                                                                                                                                                            |
 
 Each error also has a string `kind` (`'link_not_found'`, `'timeout'`, ...) and the `url` it
 belongs to.
@@ -402,14 +408,18 @@ users: links are queued until it mounts.
 
 After a link is delivered the SDK sends one best-effort `app_open` event
 (`POST /v1/public/events`) containing a random event id, the link id, the platform
-(`ios`/`android`), the SDK version (`0.3.0+react-native`) and the link's campaign values when it has
+(`ios`/`android`), the SDK version (`0.4.0+react-native`) and the link's campaign values when it has
 any, and no device identifiers. It never
 delays navigation and all failures are ignored. Disable it with `reportAppOpens: false`.
 
 Only the link's host and slug are sent to `resolve`, plus the five `utm_*` campaign parameters of
 the tapped URL when their value passes the character rule
 ([Campaign values](#campaign-values)). Every other query parameter and the fragment stay on the
-device.
+device. With `parameterLinks` set, the path of a path link and the values of the payload keys you
+configured are sent too, or for a Firebase long link the deep link's scheme, host, path and
+values of those keys with `apn` and `ibi`
+([Links without an API call](#links-without-an-api-call-optional)); do not configure keys that
+carry personal data.
 
 With `deferredLinks` switched on, the SDK additionally sends what
 [Deferred links](#deferred-links-optional) describes: the click id from the install referrer or
@@ -454,6 +464,38 @@ xcrun simctl openurl booted "https://my-app.strybok.link/<slug>"
 adb shell am start -a android.intent.action.VIEW -c android.intent.category.BROWSABLE \
   -d "https://my-app.strybok.link/<slug>"
 ```
+
+## Links without an API call (optional)
+
+The owner can let any address of the app's link hosts open a route without creating a link
+first (dashboard: Setup → Links without an API call): **path links** such as
+`https://my-app.strybok.link/product/42?id=7`, and **Firebase long links**
+`https://my-app.strybok.link/?link=https://example.com/product/42&apn=…`. Without the option the
+SDK ignores a path of several segments and a long link, and resolves a one-segment path without
+its payload, as 0.3.0 did.
+
+To receive them, pass `parameterLinks` (new in 0.4.0) to `createStrybok`. Copy its value from
+`parameterLinks` of the application's integration guide (`GET /v1/apps/:appId/integration`, also
+shown on the dashboard's setup screen); it is `null` while both kinds are off, and then you leave
+the option out:
+
+```ts
+export const strybok = createStrybok({
+  apiBaseUrl: 'https://api.strybok.com',
+  allowedHosts: ['my-app.strybok.link'],
+  parameterLinks: { payloadKeys: ['id', 'lang'] }, // parameterLinks of the integration guide
+});
+
+// https://my-app.strybok.link/product/42?id=7 → link.routePath '/product/42', link.payload { id: '7' }
+useStrybokLink(strybok, (link) => openLink(link));
+```
+
+The delivered link has the route and payload the server read (never the tapped path); only the
+configured keys and the `utm_*` values of the query are sent; an address that is no link reaches
+`onError` as `LinkNotFoundError`; invalid keys make `createStrybok` throw; deferred links are
+unchanged. Details: [JavaScript core guide](./javascript.md#links-without-an-api-call-optional);
+the exact rules: [SDK contract](./sdk-contract.md#links-without-an-api-call). Unit-tested only;
+not verified on a device.
 
 ## Deferred links (optional)
 
@@ -631,6 +673,7 @@ check did; see the [status table](./javascript.md#status).
 | Changed `app.json`, nothing happens                         | `associatedDomains` / `intentFilters` need a new native build.                                                                                                                    |
 | iOS: app opens but no link arrives                          | `RCTLinkingManager` forwarding of `continueUserActivity` is missing in `AppDelegate` (bare React Native).                                                                         |
 | App opens but nothing happens                               | Host missing from `allowedHosts`; `onError` output; API reachable from the device? Is the component that calls `useStrybokLink` mounted?                                          |
+| A path link or long link is ignored                         | `parameterLinks` is not set (or the SDK is older than 0.4.0): see [Links without an API call](#links-without-an-api-call-optional).                                               |
 | Screen opens twice, or an "unmatched route" screen appears  | The Strybok host is also in React Navigation's `linking.prefixes`, or Expo Router handles the URL too; or you navigate from both `getInitialLink()` and a listener of your own.   |
 | The launch link is handled again after a JS reload          | `Linking.getInitialURL()` keeps returning the launch URL for the life of the process, and a reload creates a new SDK instance. Development only; keep one instance in production. |
 | Works on tap in Notes/Messages, not from Instagram/Telegram | In-app browsers often do not hand links to apps. Users get the fallback page with a manual button.                                                                                |

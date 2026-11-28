@@ -5,6 +5,9 @@
  * `LinkSource`, resolves them through the Strybok API and delivers every link exactly once. It can
  * also create short links to share (`createLink`).
  *
+ * Links without an API call (path links and Firebase long links) are optional and off by default
+ * (`parameterLinks`): without the option only links with one slug are accepted.
+ *
  * Deferred links (restoring a link after the app is installed from a store) are optional and off
  * by default (`deferredLinks`). This package has no native code: on Android the app supplies the
  * install referrer through `installReferrerSources`, on iOS it passes what the person pasted to
@@ -39,6 +42,7 @@ export type {
   LinkErrorHandler,
   LinkListener,
   LinkSource,
+  ParameterLinksOptions,
   PastedLinkResult,
   ResolvedLink,
   StrybokOptions,

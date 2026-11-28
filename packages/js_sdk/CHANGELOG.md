@@ -1,3 +1,28 @@
+## 0.4.0
+
+- Links without an API call, optional and off by default: the new option
+  `parameterLinks: { payloadKeys: [...] }` (type `ParameterLinksOptions`), the value of
+  `parameterLinks` in the application's integration guide (`GET /v1/apps/:appId/integration`).
+  With it the SDK also accepts path links (`https://<host>/product/42?id=7`: a path of at most
+  512 characters without `//`, dot segments or a reserved name such as `/.well-known/…` or
+  `/favicon.ico`) and Firebase long links (`https://<host>/?link=…` with an `http(s)` deep link),
+  in the automatic flow and in `resolveUrl`. It sends the path as received and, of the query,
+  only the configured payload keys (first occurrence, 1–256 characters, no control characters,
+  re-encoded) and the `utm_*` values; for a long link the deep link rebuilt from its scheme,
+  host, path and payload keys, plus `apn` and `ibi`. Never the fragment or any other parameter.
+- The delivered link has the `routePath` and `payload` of the server's answer, never the tapped
+  path; `app_open` reports the answer's `linkId`. An address of the app's hosts that passes the
+  rules but is no link reaches `onError` as `LinkNotFoundError`.
+- An invalid option (more than 20 keys, a key twice, a key that is not 1–40 characters of
+  `A-Z a-z 0-9 _ . -`, starts with `utm_` or is `st`, `sd`, `si` or `strybok_click`) makes the
+  constructor throw a `TypeError`, like any invalid option. `parameterLinks` on the instance is
+  the validated, frozen copy (`null` when the option is not set).
+- Without the option nothing changes: only one-slug links are accepted and every request is
+  exactly the one 0.3.0 sent. Deferred links accept only one-slug links with or without it, in
+  the server's answer and in a pasted text.
+- Tested against all shared test vectors of the SDK contract (75 URLs, 19 options).
+  Unit-tested only: never run on a device or against the production API.
+
 ## 0.3.0
 
 - Campaign values. A resolved link has `campaign` (type `LinkCampaign`): the optional strings

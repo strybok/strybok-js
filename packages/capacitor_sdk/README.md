@@ -54,6 +54,29 @@ Full guide, native setup and troubleshooting:
   inside a real Capacitor app, nor on a physical device.
 - Deferred links (restoring a link tapped before the app was installed) are optional, off by
   default and unverified on devices; see below.
+- Links without an API call (path links and Firebase long links, new in 0.4.0) are optional, off
+  by default and unverified on devices; see below.
+
+## Links without an API call (optional)
+
+Path links such as `https://my-app.strybok.link/product/42?id=7` and Firebase long links
+(`https://my-app.strybok.link/?link=…`) open a route without a link being created first. The SDK
+accepts them only with the `parameterLinks` option; copy its value from `parameterLinks` of the
+application's integration guide (`GET /v1/apps/:appId/integration`, also shown on the dashboard's
+setup screen):
+
+```ts
+export const strybok = createStrybok({
+  apiBaseUrl: 'https://api.strybok.com',
+  allowedHosts: ['my-app.strybok.link'],
+  parameterLinks: { payloadKeys: ['id', 'lang'] },
+});
+```
+
+The delivered link has the `routePath` and `payload` the server read, never the tapped path; of
+the query only the configured keys and the `utm_*` values are sent. Without the option nothing
+changes. Guide:
+[`docs/capacitor.md`](../../docs/capacitor.md#links-without-an-api-call-optional).
 
 ## Deferred links (optional)
 
@@ -79,7 +102,7 @@ Guide with the app-side code, costs and limits:
 ## Install
 
 ```sh
-npm install @strybok/capacitor
+npm install @strybok/capacitor@^0.4.0
 ```
 
 ## Development

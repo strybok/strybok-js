@@ -1538,7 +1538,9 @@ describe('iOS: probabilistic matching (flow B)', () => {
   it('delivers one link when a paste and a match finish together', async () => {
     let answerMatch: (value: FetchResponseLike) => void = () => {};
     let answerRedeem: (value: FetchResponseLike) => void = () => {};
-    const launched = matching();
+    // Both requests are held open on purpose while the test waits for other events; the default
+    // 60 ms timeout let them time out ("failed") on a busy CI runner.
+    const launched = matching({ timeoutMs: 10_000 });
     launched.server.onMatch = () => new Promise((resolve) => (answerMatch = resolve));
     launched.server.onRedeem = () => new Promise((resolve) => (answerRedeem = resolve));
     await launched.sdk.initialize();
@@ -1569,7 +1571,9 @@ describe('iOS: probabilistic matching (flow B)', () => {
   it('answers alreadyHandled when the match was delivered while the paste was in flight', async () => {
     let answerMatch: (value: FetchResponseLike) => void = () => {};
     let answerRedeem: (value: FetchResponseLike) => void = () => {};
-    const launched = matching();
+    // Both requests are held open on purpose while the test waits for other events; the default
+    // 60 ms timeout let them time out ("failed") on a busy CI runner.
+    const launched = matching({ timeoutMs: 10_000 });
     launched.server.onMatch = () => new Promise((resolve) => (answerMatch = resolve));
     launched.server.onRedeem = () => new Promise((resolve) => (answerRedeem = resolve));
     await launched.sdk.initialize();

@@ -62,6 +62,30 @@ the [SDK contract](../../docs/sdk-contract.md).
   still pending.
 - Deferred links (restoring a link tapped before the app was installed) are optional, off by
   default and unverified on devices; see below.
+- Links without an API call (path links and Firebase long links, new in 0.4.0) are optional, off
+  by default and unverified on devices; see below.
+
+## Links without an API call (optional)
+
+An application can let any address of its link hosts open a route without creating a link first:
+path links such as `https://my-app.strybok.link/product/42?id=7` and Firebase long links
+(`https://my-app.strybok.link/?link=…`). The SDK accepts them only with the `parameterLinks`
+option; copy its value from `parameterLinks` of the application's integration guide
+(`GET /v1/apps/:appId/integration`, also shown on the dashboard's setup screen):
+
+```ts
+const strybok = new Strybok({
+  apiBaseUrl: 'https://api.strybok.com',
+  allowedHosts: ['my-app.strybok.link'],
+  linkSource,
+  parameterLinks: { payloadKeys: ['id', 'lang'] },
+});
+```
+
+The server decides which routes are allowed; the delivered link has the `routePath` and `payload`
+it read, never the tapped path. Of the query only the configured keys and the `utm_*` values are
+sent. Without the option the SDK accepts and sends exactly what 0.3.0 did. Guide:
+[`docs/javascript.md`](../../docs/javascript.md#links-without-an-api-call-optional).
 
 ## Deferred links (optional)
 
@@ -90,7 +114,7 @@ did. Guide, costs and limits:
 ## Install
 
 ```sh
-npm install @strybok/js
+npm install @strybok/js@^0.4.0
 ```
 
 ## Development

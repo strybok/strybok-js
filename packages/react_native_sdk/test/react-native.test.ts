@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
 import packageJson from '../package.json' with { type: 'json' };
 import corePackageJson from '../../js_sdk/package.json' with { type: 'json' };
 import {
@@ -22,6 +22,8 @@ import {
   type FetchResponseLike,
   type LinkCampaign,
   type LinkingLike,
+  type ParameterLinksOptions,
+  type ReactNativeStrybokOptions,
   type ResolvedLink,
 } from '../src/index.js';
 import { toStrybokPlatform } from '../src/platform.js';
@@ -244,6 +246,82 @@ describe('createStrybok', () => {
     expect(events[0]!['campaign']).toEqual({ source: 'instagram', medium: 'social' });
     expect('campaign' in events[1]!).toBe(false);
     expect(events[1]).toMatchObject({ type: 'app_open', sdkVersion: REACT_NATIVE_SDK_VERSION });
+  });
+
+  describe('links without an API call (parameterLinks)', () => {
+    const path = `https://${host}/product/42?id=7&secret=x#top`;
+    const long = `https://${host}/?link=https%3A%2F%2Fexample.com%2Fproduct%2F42%3Fid%3D7%26secret%3Dx&apn=com.example.app&ofl=x`;
+
+    function pathLinkApi() {
+      const resolves: string[] = [];
+      const fetch = (url: string): Promise<FetchResponseLike> => {
+        if (url.endsWith('/v1/public/events')) {
+          return Promise.resolve({ status: 202, text: () => Promise.resolve('') });
+        }
+        resolves.push(url);
+        const body = JSON.stringify({
+          linkId: 'link_kind',
+          appId: 'app_1',
+          routePath: '/product/42',
+          payload: { id: '7' },
+        });
+        return Promise.resolve({ status: 200, text: () => Promise.resolve(body) });
+      };
+      return { resolves, fetch };
+    }
+
+    it('are passed through createStrybok and delivered with the route of the answer', async () => {
+      expectTypeOf<ReactNativeStrybokOptions['parameterLinks']>().toEqualTypeOf<
+        ParameterLinksOptions | null | undefined
+      >();
+      const api = pathLinkApi();
+      const { strybok } = create({ fetch: api.fetch, parameterLinks: { payloadKeys: ['id'] } });
+      expect(strybok.parameterLinks).toEqual({ payloadKeys: ['id'] });
+      const received: ResolvedLink[] = [];
+      strybok.onLink((link) => received.push(link));
+      await strybok.initialize();
+
+      Linking.open(path);
+      Linking.open(long);
+      await settle();
+      expect(api.resolves).toEqual([
+        `${apiBaseUrl}/v1/public/resolve?url=${encodeURIComponent(`https://${host}/product/42?id=7`)}`,
+        `${apiBaseUrl}/v1/public/resolve?url=${encodeURIComponent(
+          `https://${host}/?link=https%3A%2F%2Fexample.com%2Fproduct%2F42%3Fid%3D7&apn=com.example.app`,
+        )}`,
+      ]);
+      expect(received.map(({ url, routePath, payload }) => ({ url, routePath, payload }))).toEqual([
+        { url: path, routePath: '/product/42', payload: { id: '7' } },
+        { url: long, routePath: '/product/42', payload: { id: '7' } },
+      ]);
+    });
+
+    it('are ignored without the option, exactly as in 0.3.0', async () => {
+      const api = pathLinkApi();
+      const { strybok } = create({ fetch: api.fetch });
+      expect(strybok.parameterLinks).toBeNull();
+      const received: ResolvedLink[] = [];
+      strybok.onLink((link) => received.push(link));
+      await strybok.initialize();
+      Linking.open(path);
+      Linking.open(long);
+      Linking.open(`${invite}?id=7&utm_source=mail`);
+      await settle();
+      expect(api.resolves).toEqual([
+        `${apiBaseUrl}/v1/public/resolve?url=${encodeURIComponent(`${invite}?utm_source=mail`)}`,
+      ]);
+      expect(received).toHaveLength(1);
+    });
+
+    it('reject an invalid option when the SDK is created', () => {
+      expect(() =>
+        createStrybok({
+          apiBaseUrl,
+          allowedHosts: [host],
+          parameterLinks: { payloadKeys: ['utm_source'] },
+        }),
+      ).toThrow(/^Strybok: parameterLinks/);
+    });
   });
 
   it('lets tests replace the link source and the platform', async () => {

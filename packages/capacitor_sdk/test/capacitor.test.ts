@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
 import packageJson from '../package.json' with { type: 'json' };
 import corePackageJson from '../../js_sdk/package.json' with { type: 'json' };
 import {
@@ -20,10 +20,12 @@ import {
   StrybokValidationError,
   type CapacitorAppLike,
   type CapacitorHttpLike,
+  type CapacitorStrybokOptions,
   type CreatedLink,
   type FetchRequestInit,
   type FetchResponseLike,
   type LinkCampaign,
+  type ParameterLinksOptions,
   type ResolvedLink,
 } from '../src/index.js';
 import { createStrybokWith } from '../src/factory.js';
@@ -334,6 +336,84 @@ describe('createStrybok', () => {
     await settle();
     expect(received).toEqual(['/p/first']);
     expect(resolveRequests()).toHaveLength(1);
+  });
+
+  describe('links without an API call (parameterLinks)', () => {
+    const path = `https://${host}/product/42?id=7&secret=x#top`;
+    const long = `https://${host}/?link=https%3A%2F%2Fexample.com%2Fproduct%2F42%3Fid%3D7%26secret%3Dx&apn=com.example.app&ofl=x`;
+
+    beforeEach(() => {
+      // Like the native plugin: the answer arrives already parsed.
+      state.respond = (request) =>
+        request.url.endsWith('/v1/public/events')
+          ? { status: 202, data: '' }
+          : {
+              status: 200,
+              data: {
+                linkId: 'link_kind',
+                appId: 'app_1',
+                routePath: '/product/42',
+                payload: { id: '7' },
+              },
+            };
+    });
+
+    it('are passed through createStrybok and resolved through native HTTP', async () => {
+      expectTypeOf<CapacitorStrybokOptions['parameterLinks']>().toEqualTypeOf<
+        ParameterLinksOptions | null | undefined
+      >();
+      const strybok = create({ parameterLinks: { payloadKeys: ['id'] } });
+      expect(strybok.parameterLinks).toEqual({ payloadKeys: ['id'] });
+      const received: ResolvedLink[] = [];
+      strybok.onLink((link) => received.push(link));
+      await strybok.initialize();
+
+      App.open(path);
+      App.open(long);
+      await settle();
+      expect(resolveRequests().map(({ url, method }) => ({ url, method }))).toEqual([
+        {
+          url: `${apiBaseUrl}/v1/public/resolve?url=${encodeURIComponent(`https://${host}/product/42?id=7`)}`,
+          method: 'GET',
+        },
+        {
+          url: `${apiBaseUrl}/v1/public/resolve?url=${encodeURIComponent(
+            `https://${host}/?link=https%3A%2F%2Fexample.com%2Fproduct%2F42%3Fid%3D7&apn=com.example.app`,
+          )}`,
+          method: 'GET',
+        },
+      ]);
+      expect(received.map(({ url, routePath, payload }) => ({ url, routePath, payload }))).toEqual([
+        { url: path, routePath: '/product/42', payload: { id: '7' } },
+        { url: long, routePath: '/product/42', payload: { id: '7' } },
+      ]);
+      expect(eventRequests().map((request) => request.data)).toMatchObject([
+        { linkId: 'link_kind', type: 'app_open' },
+        { linkId: 'link_kind', type: 'app_open' },
+      ]);
+    });
+
+    it('are ignored without the option, exactly as in 0.3.0', async () => {
+      const strybok = create();
+      expect(strybok.parameterLinks).toBeNull();
+      const received: ResolvedLink[] = [];
+      strybok.onLink((link) => received.push(link));
+      await strybok.initialize();
+      App.open(path);
+      App.open(long);
+      App.open(`${invite}?id=7&utm_source=mail`);
+      await settle();
+      expect(resolveRequests().map((request) => request.url)).toEqual([
+        `${apiBaseUrl}/v1/public/resolve?url=${encodeURIComponent(`${invite}?utm_source=mail`)}`,
+      ]);
+      expect(received).toHaveLength(1);
+    });
+
+    it('reject an invalid option when the SDK is created', () => {
+      expect(() => create({ parameterLinks: { payloadKeys: ['id', 'id'] } })).toThrow(
+        /^Strybok: parameterLinks/,
+      );
+    });
   });
 
   it('sends the app_open event as a JSON value with platform and adapter version', async () => {

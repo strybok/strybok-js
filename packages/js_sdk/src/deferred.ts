@@ -583,6 +583,9 @@ function scanReferrer(referrer: string): string | null | undefined {
 /**
  * The click id of a pasted text, when the text is a link of this app that carries one
  * (flow A, step 2). `null` for everything else.
+ *
+ * Only a link with one slug counts, with or without `parameterLinks`: the server offers deferred
+ * links only for stored links, so the copied link is always one (`/<slug>?strybok_click=…`).
  */
 export function pastedClickId(pasted: unknown, allowedHosts: ReadonlySet<string>): string | null {
   if (typeof pasted !== 'string') return null;
@@ -604,7 +607,9 @@ function parseDeferredAnswer(
   const { url, deferred, matched } = json;
   if (deferred !== true) return null;
   if (probabilistic && matched !== 'probabilistic') return null;
-  // The server says which link it was; a link of another app is never delivered.
+  // The server says which link it was; a link of another app is never delivered. Deliberately the
+  // slug rule only, whatever `parameterLinks` says: deferred links exist only for stored links,
+  // so an answer naming a path or long link is not one of them.
   if (typeof url !== 'string' || parseStrybokLink(url, allowedHosts) === null) return null;
   return { url, ...fields, isDeferred: true, isProbabilisticMatch: probabilistic };
 }

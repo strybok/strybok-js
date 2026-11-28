@@ -25,13 +25,14 @@ import type {
   LinkErrorHandler,
   LinkListener,
   LinkSource,
+  ParameterLinksOptions,
   PastedLinkResult,
   ResolvedLink,
   StrybokOptions,
   StrybokPlatform,
   Unsubscribe,
 } from './types.js';
-import { isHostname, parseStrybokLink } from './url.js';
+import { isHostname, parseStrybokLink, type StrybokLinkParts } from './url.js';
 import { uuidV4 } from './uuid.js';
 import { SDK_VERSION } from './version.js';
 
@@ -39,6 +40,10 @@ const API_BASE_URL = /^https?:\/\/[^\s/?#]+(\/[^\s?#]*)?$/i;
 const SDK_VERSION_FORMAT = /^[0-9A-Za-z.+-]{1,32}$/;
 const PLATFORMS: readonly StrybokPlatform[] = ['ios', 'android', 'unknown'];
 const MAX_ROUTE_PATH_LENGTH = 512;
+const MAX_PAYLOAD_KEYS = 20;
+const PAYLOAD_KEY = /^[A-Za-z0-9_.-]{1,40}$/;
+/** Query keys the link host reads itself; compared exactly (`ST` is an ordinary key). */
+const RESERVED_PAYLOAD_KEYS: readonly string[] = ['st', 'sd', 'si', 'strybok_click'];
 const DISPOSED_MESSAGE = 'Strybok has been disposed';
 const DONE: Promise<void> = Promise.resolve();
 
@@ -71,6 +76,11 @@ export class Strybok {
   readonly apiBaseUrl: string;
   /** Link hostnames of this app, lower-cased. */
   readonly allowedHosts: ReadonlySet<string>;
+  /**
+   * The validated `parameterLinks` option (a frozen copy), or `null` when it is not set: then
+   * only links with one slug are accepted.
+   */
+  readonly parameterLinks: ParameterLinksOptions | null;
   readonly platform: StrybokPlatform;
   readonly timeoutMs: number;
   readonly maxRetries: number;
@@ -129,6 +139,7 @@ export class Strybok {
       hosts.add(host.toLowerCase());
     }
     this.allowedHosts = hosts;
+    this.parameterLinks = parameterLinksOption(options.parameterLinks);
 
     const source = options.linkSource;
     if (
@@ -295,10 +306,11 @@ export class Strybok {
 
   /**
    * Whether `url` is a Strybok link of this app: `https`, a host from `allowedHosts`, default
-   * port, no credentials and a path of exactly one slug. Query and fragment do not matter.
+   * port, no credentials and a path of exactly one slug — or, with `parameterLinks`, a route path
+   * or a Firebase long link. Query and fragment do not matter (except `link` of a long link).
    */
   isStrybokUrl(url: string): boolean {
-    return parseStrybokLink(url, this.allowedHosts) !== null;
+    return this.parse(url) !== null;
   }
 
   /**
@@ -306,20 +318,21 @@ export class Strybok {
    * app open (for QR scanners, tests and custom flows).
    *
    * Rejects with a {@link StrybokError}: `UnsupportedLinkError` before any network call when the
-   * URL is not ours, `LinkNotFoundError` for unknown, disabled or expired links, and
-   * network/timeout/server errors otherwise.
+   * URL is not ours, `LinkNotFoundError` for unknown, disabled or expired links (and, with
+   * `parameterLinks`, for an address that is no link), and network/timeout/server errors
+   * otherwise.
    */
   async resolveUrl(url: string): Promise<ResolvedLink> {
     this.checkNotDisposed();
-    const parts = parseStrybokLink(url, this.allowedHosts);
+    const parts = this.parse(url);
     if (parts === null) {
       throw new UnsupportedLinkError(
         'Not a link for this app',
         typeof url === 'string' ? url : undefined,
       );
     }
-    // Of the query only the campaign parameters are sent; the rest and the fragment are not
-    // needed for the lookup and may hold private data.
+    // Of the query only the campaign parameters (and with `parameterLinks` the configured payload
+    // keys) are sent; the rest and the fragment are not needed and may hold private data.
     const endpoint = `${this.apiBaseUrl}/v1/public/resolve?url=${encodeURIComponent(parts.lookupUrl)}`;
 
     let lastError: StrybokError | null = null;
@@ -482,6 +495,11 @@ export class Strybok {
   }
 
   // -----------------------------------------------------------------------------------------
+
+  /** "Which URLs are ours", for the automatic flow and `resolveUrl` alike. */
+  private parse(url: unknown): StrybokLinkParts | null {
+    return parseStrybokLink(url, this.allowedHosts, this.parameterLinks?.payloadKeys ?? null);
+  }
 
   private async start(): Promise<void> {
     // Listen first so a link arriving during start-up is not missed.
@@ -742,6 +760,46 @@ function isJsonObject(value: unknown): boolean {
   } catch {
     return false; // Circular, or holds a BigInt.
   }
+}
+
+/**
+ * The `parameterLinks` option as the contract's "The option" allows it, copied and frozen so a
+ * later change to the app's array changes nothing; `null` when it is not set.
+ */
+function parameterLinksOption(value: unknown): ParameterLinksOptions | null {
+  if (value === undefined || value === null) return null;
+  const keys: unknown = isRecord(value) ? value['payloadKeys'] : undefined;
+  if (!Array.isArray(keys)) {
+    throw new TypeError(
+      'Strybok: parameterLinks must be an object with a payloadKeys list, ' +
+        'e.g. { payloadKeys: ["id"] }, as parameterLinks of the integration guide gives it',
+    );
+  }
+  if (keys.length > MAX_PAYLOAD_KEYS) {
+    throw new TypeError(
+      `Strybok: parameterLinks.payloadKeys has more than ${MAX_PAYLOAD_KEYS} keys`,
+    );
+  }
+  const payloadKeys: string[] = [];
+  for (const key of keys as unknown[]) {
+    if (
+      typeof key !== 'string' ||
+      !PAYLOAD_KEY.test(key) ||
+      key.toLowerCase().startsWith('utm_') ||
+      RESERVED_PAYLOAD_KEYS.includes(key)
+    ) {
+      throw new TypeError(
+        'Strybok: parameterLinks.payloadKeys entries must be 1-40 characters of ' +
+          '[A-Za-z0-9_.-], not start with utm_ and not be st, sd, si or strybok_click, ' +
+          `got ${typeof key === 'string' ? JSON.stringify(key) : typeof key}`,
+      );
+    }
+    if (payloadKeys.includes(key)) {
+      throw new TypeError(`Strybok: parameterLinks.payloadKeys lists ${JSON.stringify(key)} twice`);
+    }
+    payloadKeys.push(key);
+  }
+  return Object.freeze({ payloadKeys: Object.freeze(payloadKeys) });
 }
 
 function duration(name: string, value: number | undefined, fallback: number): number {

@@ -160,6 +160,20 @@ export interface DeferredLinkStore {
   setItem(key: string, value: string): unknown;
 }
 
+/**
+ * The `parameterLinks` option: deliver links without an API call (path links and Firebase long
+ * links) and send these query keys with them. Copy it from `parameterLinks` of the application's
+ * integration guide (`GET /v1/apps/:appId/integration`, also on the dashboard's setup screen).
+ */
+export interface ParameterLinksOptions {
+  /**
+   * The query keys the owner allows as payload, in the owner's order: at most 20, each once,
+   * 1–40 characters of `A-Z a-z 0-9 _ . -`, none starting with `utm_` and none of `st`, `sd`,
+   * `si`, `strybok_click`. May be empty: path links then carry no payload.
+   */
+  readonly payloadKeys: readonly string[];
+}
+
 export type LinkListener = (link: ResolvedLink) => void;
 export type LinkErrorHandler = (error: StrybokError) => void;
 export type Unsubscribe = () => void;
@@ -197,6 +211,19 @@ export interface StrybokOptions {
 
   /** Link hostnames of this app (bare hostnames, no scheme). Links on any other host are ignored. */
   allowedHosts: Iterable<string>;
+
+  /**
+   * Links without an API call: besides links with one slug (`https://<host>/invite777`), also
+   * accept path links (`https://<host>/product/42?id=7`) and Firebase long links
+   * (`https://<host>/?link=…`), and send the values of these query keys with them. The server
+   * decides which routes are allowed; the delivered link has the route and payload it read.
+   *
+   * Copy the value of `parameterLinks` from the integration guide; it is `null` while the owner
+   * has both kinds switched off, and then leave this option out. Default: not set (`null` means
+   * the same), and the SDK accepts and sends exactly what 0.3.0 did. An invalid value makes the
+   * constructor throw. Deferred links keep accepting only one-slug links.
+   */
+  parameterLinks?: ParameterLinksOptions | null;
 
   /** Where incoming URLs come from. */
   linkSource: LinkSource;
@@ -246,7 +273,7 @@ export interface StrybokOptions {
 
   /**
    * Overrides the SDK version sent with `app_open` events. Meant for adapters built on this core
-   * (they append their name, e.g. `0.3.0+react-native`); at most 32 characters of `[0-9A-Za-z.+-]`.
+   * (they append their name, e.g. `0.4.0+react-native`); at most 32 characters of `[0-9A-Za-z.+-]`.
    */
   sdkVersion?: string;
 
